@@ -17,6 +17,8 @@ import { TemporalRegisterMissingSearchAttributesModule } from '@gitroom/nestjs-l
 import { InfiniteWorkflowRegisterModule } from '@gitroom/nestjs-libraries/temporal/infinite.workflow.register';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
+// ysocial patch 1 (YSOCIAL-PATCHES.md)
+import { YsocialModule } from '@gitroom/backend/ysocial/ysocial.module';
 
 @Global()
 @Module({
@@ -41,6 +43,7 @@ import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
       ],
       storage: new ThrottlerStorageRedisService(ioRedis),
     }),
+    YsocialModule,
   ],
   controllers: [],
   providers: [
