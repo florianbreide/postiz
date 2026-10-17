@@ -49,5 +49,5 @@ Lies zu Beginn: die Root-`CLAUDE.md` von Postiz (sie gilt weiter und bleibt unve
 ## Befehle
 
 - Lokal starten: `docs/YSOCIAL-LOKAL.md`
-- Tests der ysocial-Ordner: `pnpm exec jest -c libraries/ysocial/jest.config.js`
+- Tests der ysocial-Ordner: `pnpm exec jest -c libraries/ysocial/jest.config.js` und `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs`
 - Patch-Prüfung: `git diff <basis-tag> --stat` zeigt nur Dateien aus `YSOCIAL-PATCHES.md`.
