@@ -2,9 +2,9 @@
 
 Diese Datei listet jede Abweichung unseres Forks von Postiz. Sie ist die Grundlage für jeden Upstream-Sync.
 
-- Fork: `ysocial-media/postiz`, Original: `gitroomhq/postiz-app` (Remote `upstream`)
+- Fork: `florianbreide/postiz`, Original: `gitroomhq/postiz-app` (Remote `upstream`)
 - Basis: upstream v2.25.1 (11.10.2026)
-- Verbindliche Vorgabe: `docs/HANDOVER.md` im Repo `ysocial-media/social-hub`
+- Verbindliche Vorgabe: `docs/HANDOVER.md` im Repo `florianbreide/social-hub`
 
 ## Regeln
 
@@ -80,4 +80,4 @@ PRs gehen nie an `gitroomhq/postiz-app`. Deshalb hat der Remote `upstream` keine
 
     git remote set-url --push upstream no_push
 
-`git remote -v` zeigt `upstream … no_push (push)`. Vor jedem `gh pr create` zeigt `gh repo set-default --view` das Repo `ysocial-media/postiz`.
+`git remote -v` zeigt `upstream … no_push (push)`. Vor jedem `gh pr create` zeigt `gh repo set-default --view` das Repo `florianbreide/postiz`.

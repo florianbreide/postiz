@@ -11,8 +11,8 @@ Diese Datei enthält nur den Patch-Stand und Verweise. Status, Termine und offen
 
 ## Verweise
 
-- Status und nächste Schritte: `ROADMAP.md` im Repo `ysocial-media/social-hub` (lokal `../social-hub/ROADMAP.md`)
-- Verbindliche Vorgabe: `docs/HANDOVER.md` im Repo `ysocial-media/social-hub` (lokal `../social-hub/docs/HANDOVER.md`)
+- Status und nächste Schritte: `ROADMAP.md` im Repo `florianbreide/social-hub` (lokal `../social-hub/ROADMAP.md`)
+- Verbindliche Vorgabe: `docs/HANDOVER.md` im Repo `florianbreide/social-hub` (lokal `../social-hub/docs/HANDOVER.md`)
 - Upstream-Sync: `YSOCIAL-PATCHES.md`, Prüfliste `docs/STAGING-TESTPLAN.md`
 - Lokaler Start: `docs/YSOCIAL-LOKAL.md`
 - Regeln für Claude Code: `.claude/CLAUDE.md`

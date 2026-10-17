@@ -1,8 +1,8 @@
-# Claude Code im Fork `ysocial-media/postiz`
+# Claude Code im Fork `florianbreide/postiz`
 
 Dieser Fork von Postiz gehört der Y Social Media GmbH. Er ist öffentlich (AGPL).
 
-**Verbindlich ist die Übergabe:** `../social-hub/docs/HANDOVER.md` im lokalen Nachbar-Checkout von `ysocial-media/social-hub`. Sie hat Vorrang vor diesem Code, vor dieser Datei und vor der Postiz-`CLAUDE.md` im Root. Widersprüche meldest du, du löst sie nicht still. Fehlt der Nachbar-Checkout, frag Florian.
+**Verbindlich ist die Übergabe:** `../social-hub/docs/HANDOVER.md` im lokalen Nachbar-Checkout von `florianbreide/social-hub`. Sie hat Vorrang vor diesem Code, vor dieser Datei und vor der Postiz-`CLAUDE.md` im Root. Widersprüche meldest du, du löst sie nicht still. Fehlt der Nachbar-Checkout, frag Florian.
 
 Lies zu Beginn: die Root-`CLAUDE.md` von Postiz (sie gilt weiter und bleibt unverändert), dann diese Datei, dann `YSOCIAL-PATCHES.md`.
 
@@ -30,7 +30,7 @@ Lies zu Beginn: die Root-`CLAUDE.md` von Postiz (sie gilt weiter und bleibt unve
 - Jeder ysocial-Controller bekommt `YsocialTokenGuard` oder einen strengeren Guard. Die globalen Postiz-Guards lassen neue Controller durch, die Auth-Middleware gilt nur für eine feste Liste von Postiz-Controllern. Kein ysocial-Pfad enthält `/auth`, denn der `PoliciesGuard` überspringt solche Pfade. Ein Test in `ysocial.token.guard.spec.ts` prüft den Guard an jedem Controller. Einen strengeren Guard trägst du dort in `ACCEPTED_GUARDS` ein.
 - Fehlt ein Secret, weist der Code ab (fail-closed). Tokens erscheinen nie in Logs oder Antworten.
 - Temporal: Postiz-Workflows nie ändern, sondern versionieren. Eigene Aktivitäten tragen das Präfix `ysocial`, weil Aktivitäten nach Methodennamen registriert werden. Workflows des Hubs setzen nie das Suchattribut `postId`.
-- Nie PRs an `gitroomhq/postiz-app`. Die PR-Basis ist immer `ysocial-media/postiz`. Prüfe das vor jedem `gh pr create` mit `gh repo set-default --view`. Der Remote `upstream` hat die Push-Adresse `no_push`, das bleibt so.
+- Nie PRs an `gitroomhq/postiz-app`. Die PR-Basis ist immer `florianbreide/postiz`. Prüfe das vor jedem `gh pr create` mit `gh repo set-default --view`. Der Remote `upstream` hat die Push-Adresse `no_push`, das bleibt so.
 - Nie direkt auf `main` pushen. Florian mergt.
 - Upstream nur über Release-Tags: monatlich PR `upstream-sync/<yyyy-mm>`, Sicherheitsreleases sofort. Ablauf in `YSOCIAL-PATCHES.md`, Prüfliste in `docs/STAGING-TESTPLAN.md`. Änderungen in `.github/workflows/`, `.claude/` und `CLAUDE.md` liest du vor dem Merge.
 - Die `.env` liest du nie und gibst sie nie aus. `.claude/settings.json` von Postiz sperrt das zusätzlich.
