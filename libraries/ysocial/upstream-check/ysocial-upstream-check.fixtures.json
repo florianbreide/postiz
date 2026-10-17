@@ -1,0 +1,124 @@
+{
+  "_comment": "Test data for ysocial-upstream-check.test.mjs. All release names and bodies are invented. 'upstream_wording' uses tags and dates of real upstream releases (public version metadata, 17.10.2026) and invented bodies that follow the upstream wording: notices like 'upgrade immediately' with an advisory ID, a '## Security' section, plain changelogs. Handles, PR links and advisory IDs are invented (@beispiel-person, example.invalid, PSA-2099-..., GHSA-beis-...). 'synthetic' holds invented releases that do not exist.",
+  "upstream_wording": [
+    {
+      "tag_name": "v2.25.1",
+      "name": "v2.25.1",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.25.1",
+      "published_at": "2026-10-11T15:19:10Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "> [!IMPORTANT]\n> This release addresses the security vulnerability [PSA-2099-AAAA](https://advisories.example.invalid/PSA-2099-AAAA), all users are recommended to upgrade immediately.\n\n## What's Changed\n* fix(beispiel): erfundene Änderung by @beispiel-person in https://example.invalid/beispiel/pull/1\n* feat(beispiel): zweite erfundene Änderung by @beispiel-person in https://example.invalid/beispiel/pull/2"
+    },
+    {
+      "tag_name": "v2.25.0",
+      "name": "Erfundener Titel eines Feature-Release",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.25.0",
+      "published_at": "2026-10-02T11:21:13Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## Highlights\n\nErfundene Beschreibung neuer Funktionen.\n\n> [!IMPORTANT]\n> This release changes the Prisma schema. See [Upgrade notes](#upgrade-notes).\n\n## Features\n- Erfundenes Feature (#3)"
+    },
+    {
+      "tag_name": "v2.24.0",
+      "name": "",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.24.0",
+      "published_at": "2026-09-22T14:22:31Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "> [!IMPORTANT]\n> This release addresses the security vulnerabilities [PSA-2099-BBBB](https://advisories.example.invalid/PSA-2099-BBBB) and [PSA-2099-CCCC](https://advisories.example.invalid/PSA-2099-CCCC), all users are recommended to upgrade immediately.\n\n## Highlights\n\nErfundene Beschreibung eines großen Release."
+    },
+    {
+      "tag_name": "v2.23.0",
+      "name": "Erfundener Titel: Zuverlässigkeit",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.23.0",
+      "published_at": "2026-08-04T06:53:15Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## Highlights\n\nErfundene Beschreibung.\n\n## 🔒 Security\n\n- Erfundene Härtung beim Abruf externer Adressen"
+    },
+    {
+      "tag_name": "v2.22.1",
+      "name": "v2.22.1",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.22.1",
+      "published_at": "2026-07-25T04:20:25Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## What's Changed\n* fix: erfundene Korrektur by @beispiel-person in https://example.invalid/beispiel/pull/4"
+    },
+    {
+      "tag_name": "v2.21.10",
+      "name": "v2.21.10",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.21.10",
+      "published_at": "2026-06-22T13:46:03Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "> [!WARNING]\n> This release addresses the security vulnerability [PSA-2099-DDDD](https://advisories.example.invalid/PSA-2099-DDDD), all users are recommended to upgrade immediately."
+    },
+    {
+      "tag_name": "v2.21.9",
+      "name": "v2.21.9",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.21.9",
+      "published_at": "2026-06-18T03:15:11Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## What's Changed\n* feat: erfundene Änderung by @beispiel-person in https://example.invalid/beispiel/pull/5"
+    },
+    {
+      "tag_name": "v2.21.6",
+      "name": "v2.21.6",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.21.6",
+      "published_at": "2026-04-12T04:06:51Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "> [!WARNING]\n> This release addresses the security vulnerability `GHSA-beis-piel-0001`, all users are recommended to upgrade immediately."
+    },
+    {
+      "tag_name": "v2.20.0",
+      "name": "v2.20.0",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.20.0",
+      "published_at": "2026-03-06T10:00:00Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## What's Changed\n* docs: erfundene neue Kontaktadresse für Meldungen zu security vulnerabilities by @beispiel-person in https://example.invalid/beispiel/pull/6"
+    }
+  ],
+  "synthetic": [
+    {
+      "tag_name": "v2.27.0-rc.1",
+      "name": "v2.27.0-rc.1",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.27.0-rc.1",
+      "published_at": "2026-10-20T09:00:00Z",
+      "draft": false,
+      "prerelease": true,
+      "body": "Release candidate. Erfunden für den Test."
+    },
+    {
+      "tag_name": "v2.26.0",
+      "name": "Erfundenes Feature-Release",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.26.0",
+      "published_at": "2026-10-19T08:00:00Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "## What's Changed\n* feat: erfundene Änderung für den Test"
+    },
+    {
+      "tag_name": "v2.25.2",
+      "name": "v2.25.2",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.25.2",
+      "published_at": "2026-10-14T22:30:00Z",
+      "draft": false,
+      "prerelease": false,
+      "body": "> [!WARNING]\n> Fixes CVE-2099-0001 (erfunden für den Test)."
+    },
+    {
+      "tag_name": "v2.26.1",
+      "name": "v2.26.1",
+      "html_url": "https://github.com/gitroomhq/postiz-app/releases/tag/v2.26.1",
+      "published_at": "2026-10-21T08:00:00Z",
+      "draft": true,
+      "prerelease": false,
+      "body": "Entwurf, erfunden für den Test."
+    }
+  ]
+}

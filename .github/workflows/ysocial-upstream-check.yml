@@ -1,0 +1,61 @@
+# ysocial: weekly check for a new Postiz release (E11, R13).
+#
+# Reads the latest release of gitroomhq/postiz-app, compares it with the base
+# in YSOCIAL-PATCHES.md and opens one issue "Postiz <tag> verfügbar". Open and
+# closed issues with the same title count as duplicates if this workflow
+# created them (github-actions[bot]). Releases with a clear security notice get
+# the label `sicherheit`. Logic and tests: libraries/ysocial/upstream-check/.
+#
+# Only GITHUB_TOKEN, no other secrets. Actions are pinned by commit SHA.
+
+name: ysocial upstream check
+
+on:
+  schedule:
+    # Off the full hour: GitHub delays, and under load drops, runs at :00.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Probelauf: nur prüfen und das Issue ins Log schreiben, nichts anlegen'
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: ysocial-upstream-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # Cone mode always includes files in the repo root (YSOCIAL-PATCHES.md).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: libraries/ysocial/upstream-check
+
+      - name: Check upstream release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          # Retries the reads. The script turns retries off for issues.create.
+          retries: 3
+          script: |
+            const workspace = process.env.GITHUB_WORKSPACE;
+            const { run } = await import(`${workspace}/libraries/ysocial/upstream-check/ysocial-upstream-check.mjs`);
+            return await run({
+              github,
+              context,
+              core,
+              patchesPath: `${workspace}/YSOCIAL-PATCHES.md`,
+              dryRun: process.env.DRY_RUN === 'true',
+            });
