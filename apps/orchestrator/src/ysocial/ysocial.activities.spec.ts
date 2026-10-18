@@ -56,7 +56,7 @@ describe('ysocial activities', () => {
   });
 
   it('are registered bound to the instance', () => {
-    const instance = new YsocialActivities({} as any, {} as any);
+    const instance = new YsocialActivities({} as any, {} as any, {} as any);
     const activities = buildYsocialActivities(instance);
     expect(Object.keys(activities).sort()).toEqual(
       ysocialActivityNames().sort()
@@ -108,7 +108,9 @@ describe('ysocialDeliverEvent', () => {
   });
 
   const deliver = () =>
-    new YsocialActivities({} as any, {} as any).ysocialDeliverEvent(event);
+    new YsocialActivities({} as any, {} as any, {} as any).ysocialDeliverEvent(
+      event
+    );
 
   it('delivers to the mock hub', async () => {
     expect(await deliver()).toEqual({ status: 202, duplicate: false });
@@ -160,7 +162,8 @@ describe('ysocialStartPostVerifications', () => {
     };
     const activities = new YsocialActivities(
       verification as any,
-      temporal as any
+      temporal as any,
+      {} as any
     );
     return { activities, start, verification, temporal };
   };
@@ -222,5 +225,29 @@ describe('ysocialStartPostVerifications', () => {
     await expect(activities.ysocialStartPostVerifications()).rejects.toThrow(
       'unavailable'
     );
+  });
+});
+
+describe('channel checks', () => {
+  it('hand the hourly check and DailyHealth to the service', async () => {
+    const channelHealth = {
+      checkChannels: jest.fn().mockResolvedValue({ channels: 2, events: [] }),
+      runDailyHealth: jest
+        .fn()
+        .mockResolvedValue({ events: [], summary: { day: '2026-10-27' } }),
+    };
+    const activities = new YsocialActivities(
+      {} as any,
+      {} as any,
+      channelHealth as any
+    );
+    expect(await activities.ysocialCheckChannels({})).toEqual({
+      channels: 2,
+      events: [],
+    });
+    expect(await activities.ysocialRunDailyHealth({})).toEqual({
+      events: [],
+      summary: { day: '2026-10-27' },
+    });
   });
 });

@@ -20,6 +20,13 @@ export const HUB_EVENT_KINDS = [
   'post.verified',
   'post.unverifiable',
   'post.resolved',
+  // Channel check and DailyHealth (PR 18, E23)
+  'channel.disconnected',
+  'channel.reconnected',
+  'channel.removed',
+  'channel.auth_invalid',
+  'channel.token_expiring',
+  'health.daily',
 ] as const;
 
 export type HubEventKind = (typeof HUB_EVENT_KINDS)[number];

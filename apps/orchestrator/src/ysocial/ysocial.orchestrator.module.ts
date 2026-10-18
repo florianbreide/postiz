@@ -4,6 +4,8 @@ import { YsocialWorkerService } from './ysocial.worker.service';
 import { YsocialTemporalClient } from './ysocial.temporal.client';
 import { YsocialPostRepository } from '../../../../libraries/ysocial/src/database/ysocial.post.repository';
 import { YsocialPostVerificationService } from '../../../../libraries/ysocial/src/verification/ysocial.post.verification.service';
+import { YsocialIntegrationRepository } from '../../../../libraries/ysocial/src/database/ysocial.integration.repository';
+import { YsocialChannelHealthService } from '../../../../libraries/ysocial/src/health/ysocial.channel.health.service';
 
 // Entry point for all ysocial orchestrator code. Imported once in
 // apps/orchestrator/src/app.module.ts (patch 2, see YSOCIAL-PATCHES.md).
@@ -13,6 +15,8 @@ import { YsocialPostVerificationService } from '../../../../libraries/ysocial/sr
   providers: [
     YsocialPostRepository,
     YsocialPostVerificationService,
+    YsocialIntegrationRepository,
+    YsocialChannelHealthService,
     YsocialTemporalClient,
     YsocialActivities,
     YsocialWorkerService,

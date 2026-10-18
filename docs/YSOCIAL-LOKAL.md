@@ -103,7 +103,7 @@ Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleib
 | Orchestrator | `curl http://localhost:3002/health/status` | `{"status":"ok"}` |
 | Registrierung gesperrt | `curl http://localhost:3000/auth/can-register` | `{"register":false}`, sobald ein Nutzer existiert |
 | ysocial ohne Token | `curl -i http://localhost:3000/ysocial/status` | `401` (ohne `YSOCIAL_SERVICE_TOKEN` in der `.env`: `503`) |
-| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.3.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
+| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.4.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
 | Temporal-UI | `http://localhost:8080` im Browser | Namespace `default` sichtbar |
 
 Statusroute mit Token, ohne ihn auszugeben. Nur für dich im eigenen Terminal. Claude führt das nicht aus, weil Claude die `.env` nie liest.
@@ -128,14 +128,14 @@ Die Datei hat die Rechte 600 und steht in `.git/info/exclude` (siehe „Lokale D
 
     corepack pnpm exec jest -c libraries/ysocial/jest.config.js
 
-Erwartet (Stand PR 17): 15 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+Erwartet (Stand PR 18): 19 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Die Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
 
 ## ysocial-Worker lokal (ab PR 16)
 
 Der ysocial-Worker im Orchestrator braucht einen eigenen Namespace in Temporal und drei Variablen. Ohne sie läuft Postiz normal, der Worker bleibt aus.
 
 1. Namespace einmalig anlegen: `docker exec temporal temporal operator namespace create --namespace ysocial --address temporal:7233`. Antwort: `Namespace ysocial successfully registered.` Meldet die CLI, dass sie `temporal:7233` nicht erreicht, nimm `--address 127.0.0.1:7233`. Nach `down` und neuem `up` fehlt er wieder (anonyme Volumes, siehe unten).
-2. Test gegen das lokale Temporal, ohne `.env` und ohne laufendes Postiz: `YSOCIAL_IT_TEMPORAL_ADDRESS=localhost:7233 corepack pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.worker.integration`. Der Test startet den echten Worker, einen Mock-Hub und einen Ping. Erwartet: 3 Tests grün. Der Test legt den Schedule `ysocial-post-verification` an und löscht ihn am Ende.
+2. Test gegen das lokale Temporal, ohne `.env` und ohne laufendes Postiz: `YSOCIAL_IT_TEMPORAL_ADDRESS=localhost:7233 corepack pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.worker.integration`. Der Test startet den echten Worker, einen Mock-Hub und einen Ping. Erwartet: 4 Tests grün. Der Test legt die Schedules `ysocial-post-verification`, `ysocial-channel-check` und `ysocial-daily-health` an und löscht sie am Ende.
 3. Worker im laufenden Orchestrator, optional: In der `.env` `HUB_INTERNAL_URL="http://localhost:3999"`, `HUB_INTERNAL_TOKEN` (Ausgabe von `openssl rand -hex 32`) und `YSOCIAL_TEMPORAL_NAMESPACE="ysocial"` eintragen und `pnpm run dev` neu starten. Im Log steht `ysocial worker running (namespace ysocial, queue ysocial-postiz)`. Unter `localhost:3999` läuft lokal kein Hub. Ein Ping (`docker exec temporal temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialPingWorkflow --workflow-id ysocial-ping-lokal --address temporal:7233`) wiederholt deshalb die Zustellung, bis du den Workflow `ysocial-event-…` in der Temporal-UI beendest.
 
 Die Variablen und das Format der Ereignisse beschreibt `apps/orchestrator/src/ysocial/README.md`.
@@ -154,6 +154,7 @@ Die Variablen und das Format der Ereignisse beschreibt `apps/orchestrator/src/ys
 - **Speicher auf dem Mac:** Die Node-Prozesse laufen außerhalb von Docker. Die Watcher von Backend und Orchestrator belegten je etwa 3 GB, Next.js etwa 1,2 GB.
 - **Temporal-Daten:** Temporal-Postgres und Elasticsearch nutzen in `docker-compose.dev.yaml` anonyme Volumes. Nach `down` und neuem `up` startet Temporal leer. Lokal geplante Posts haben dann keinen Workflow mehr. Die alten anonymen Volumes bleiben als „dangling“ liegen (`docker volume ls -f dangling=true`). Zum Pausieren `stop` nutzen.
 - **Port 3000 belegt:** Ein anderes lokales Projekt kann Port 3000 nutzen. Dann in der `.env` `PORT="3001"` setzen und `NEXT_PUBLIC_BACKEND_URL` und `BACKEND_INTERNAL_URL` auf `http://localhost:3001` ändern.
+- **Prisma liest eine `.env`:** Der generierte Prisma-Client lädt beim Import die Datei `.env` drei Ebenen über `node_modules/.prisma/client`, also die `.env` im Repo-Root. Zeigt `node_modules` in einem Worktree per Link auf den Haupt-Checkout, ist das die `.env` des Haupt-Checkouts. Jeder Prozess, der Postiz-Code mit Prisma startet, hat danach deren Werte in seiner Umgebung. Für Claude Code heißt das: Postiz-Prozesse nur starten, wenn Florian zustimmt, und keine Umgebung ausgeben. Die ysocial-Tests sind davon frei (Stub).
 - **Falsches Node:** Ohne `fnm use` läuft Node 26. Jede neue Shell braucht `eval "$(fnm env --shell zsh)"` und `fnm use`, oder `fnm exec --using=22 …` vor dem Befehl.
 - **Anmeldung im Browser:** Postiz setzt das Cookie `auth` mit `secure`. Chrome und Firefox akzeptieren das auf `http://localhost`. Safari ist ungeprüft. Klappt die Anmeldung dort nicht, nutze Chrome.
 - **Medien lokal:** Ohne den nginx aus dem Postiz-Image liefert lokal niemand `/uploads/…` aus. Vorschauen hochgeladener Bilder sind lokal ungeprüft. Instagram und TikTok holen Medien ohnehin per öffentlicher URL, Test-Posts laufen deshalb auf Staging (E7).

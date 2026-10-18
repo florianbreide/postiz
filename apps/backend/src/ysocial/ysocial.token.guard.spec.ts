@@ -15,6 +15,8 @@ import { Test } from '@nestjs/testing';
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialModule } from './ysocial.module';
 import { YsocialStatusController } from './ysocial.status.controller';
+import { YsocialReadController } from './ysocial.read.controller';
+import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
@@ -122,6 +124,7 @@ describe('every ysocial controller', () => {
 
   it('finds the controllers', () => {
     expect(controllers).toContain(YsocialStatusController);
+    expect(controllers).toContain(YsocialReadController);
   });
 
   it.each(
@@ -139,9 +142,13 @@ describe('GET /ysocial/status', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
+    // The read API needs the Postiz database, the status route does not.
     const moduleRef = await Test.createTestingModule({
       imports: [YsocialModule],
-    }).compile();
+    })
+      .overrideProvider(YsocialReadRepository)
+      .useValue({})
+      .compile();
     app = moduleRef.createNestApplication({ logger: false });
     await app.listen(0, '127.0.0.1');
     baseUrl = (await app.getUrl()).replace('[::1]', '127.0.0.1');

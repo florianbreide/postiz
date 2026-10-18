@@ -8,6 +8,8 @@ const mockStartChild = jest.fn();
 const mockActivities = {
   ysocialDeliverEvent: jest.fn(),
   ysocialStartPostVerifications: jest.fn(),
+  ysocialCheckChannels: jest.fn(),
+  ysocialRunDailyHealth: jest.fn(),
 };
 const mockInfo = {
   workflowId: 'ysocial-ping-qa',
@@ -29,6 +31,9 @@ import { ysocialPingWorkflow } from './ysocial.ping.workflow';
 import { ysocialDeliverEventWorkflow } from './ysocial.deliver.event.workflow';
 import { emitHubEvent } from './ysocial.emit';
 import { ysocialPostVerificationWorkflow } from './ysocial.post.verification.workflow';
+import { ysocialChannelCheckWorkflow } from './ysocial.channel.check.workflow';
+import { ysocialDailyHealthWorkflow } from './ysocial.daily.health.workflow';
+import { createHubEvent } from '../../../../../libraries/ysocial/src/events/hub.event';
 
 const POSTIZ_WORKFLOWS = join(__dirname, '..', '..', 'workflows');
 
@@ -67,6 +72,8 @@ describe('ysocial workflows', () => {
         'ysocialDeliverEventWorkflow',
         'ysocialPostVerificationWorkflow',
         'ysocialVerifyPostWorkflow',
+        'ysocialChannelCheckWorkflow',
+        'ysocialDailyHealthWorkflow',
       ])
     );
     const postiz = postizWorkflowNames();
@@ -166,5 +173,52 @@ describe('ysocialPostVerificationWorkflow', () => {
     expect(mockActivities.ysocialStartPostVerifications).toHaveBeenCalledWith({
       windowMinutes: 2880,
     });
+  });
+});
+
+describe('channel workflows', () => {
+  const event = (kind: any, id: string) =>
+    createHubEvent({
+      kind,
+      subject: { type: kind === 'health.daily' ? 'system' : 'channel', id },
+      stateKey: '1',
+      occurredAt: '2026-10-27T06:00:00.000Z',
+    });
+
+  it('ysocialChannelCheckWorkflow hands every event to its delivery', async () => {
+    mockStartChild.mockResolvedValue({});
+    mockActivities.ysocialCheckChannels.mockResolvedValue({
+      channels: 3,
+      events: [
+        event('channel.disconnected', 'int-1'),
+        event('channel.reconnected', 'int-2'),
+      ],
+    });
+    expect(await ysocialChannelCheckWorkflow()).toEqual({
+      channels: 3,
+      events: ['channel.disconnected:int-1:1', 'channel.reconnected:int-2:1'],
+    });
+    expect(
+      mockStartChild.mock.calls.map(([, options]) => options.workflowId)
+    ).toEqual([
+      'ysocial-event-channel.disconnected:int-1:1',
+      'ysocial-event-channel.reconnected:int-2:1',
+    ]);
+  });
+
+  it('ysocialDailyHealthWorkflow sends the findings, then the summary', async () => {
+    mockStartChild.mockResolvedValue({});
+    const summary = { day: '2026-10-27', channels: 1 };
+    mockActivities.ysocialRunDailyHealth.mockResolvedValue({
+      events: [
+        event('channel.auth_invalid', 'int-1'),
+        event('health.daily', 'postiz'),
+      ],
+      summary,
+    });
+    expect(await ysocialDailyHealthWorkflow()).toEqual(summary);
+    expect(
+      mockStartChild.mock.calls.map(([, options]) => options.args[0].kind)
+    ).toEqual(['channel.auth_invalid', 'health.daily']);
   });
 });

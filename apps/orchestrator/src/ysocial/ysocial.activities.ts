@@ -18,6 +18,10 @@ import {
   PlatformCheck,
   PostVerificationSnapshot,
 } from '../../../../libraries/ysocial/src/verification/post.verification';
+import {
+  DailyHealthSummary,
+  YsocialChannelHealthService,
+} from '../../../../libraries/ysocial/src/health/ysocial.channel.health.service';
 import { YsocialTemporalClient } from './ysocial.temporal.client';
 
 export const verifyPostWorkflowId = (postId: string) =>
@@ -53,7 +57,8 @@ export class YsocialActivities {
 
   constructor(
     private _verification: YsocialPostVerificationService,
-    private _temporal: YsocialTemporalClient
+    private _temporal: YsocialTemporalClient,
+    private _channelHealth: YsocialChannelHealthService
   ) {}
 
   async ysocialDeliverEvent(
@@ -145,6 +150,21 @@ export class YsocialActivities {
     postId: string;
   }): Promise<PlatformCheck> {
     return this._verification.checkOnPlatform(input.postId);
+  }
+
+  // Hourly channel check from the database fields, no platform call.
+  async ysocialCheckChannels(
+    _input?: Record<string, never>
+  ): Promise<{ channels: number; events: HubEvent[] }> {
+    return this._channelHealth.checkChannels();
+  }
+
+  // DailyHealth: database fields, one reading platform call per channel,
+  // posts in ERROR of the last 7 days.
+  async ysocialRunDailyHealth(
+    _input?: Record<string, never>
+  ): Promise<{ events: HubEvent[]; summary: DailyHealthSummary }> {
+    return this._channelHealth.runDailyHealth();
   }
 }
 
