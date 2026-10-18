@@ -45,8 +45,8 @@ Geplant in Phase 1: Patch 3 in `libraries/nestjs-libraries/src/database/prisma/p
 | Ordner | Inhalt |
 |---|---|
 | `apps/backend/src/ysocial/` | `YsocialModule`, `GET /ysocial/status` hinter `YsocialTokenGuard` mit dem Zustand des Workers, Tests |
-| `apps/orchestrator/src/ysocial/` | `YsocialOrchestratorModule`: eigener Temporal-Worker (Namespace `ysocial`, Queue `ysocial-postiz`), Aktivitäten und Workflows mit Präfix `ysocial`, Ereignisse an den Hub, Tests. Beschreibung in `README.md` dort |
-| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Konfiguration und Zustand des Workers, Ereignisse an den Hub, Modulversion, Jest-Konfiguration |
+| `apps/orchestrator/src/ysocial/` | `YsocialOrchestratorModule`: eigener Temporal-Worker (Namespace `ysocial`, Queue `ysocial-postiz`), Schedules, Aktivitäten und Workflows mit Präfix `ysocial`, Ereignisse an den Hub, `PostVerification`, Tests. Beschreibung in `README.md` dort |
+| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Konfiguration und Zustand des Workers, Ereignisse an den Hub, Regeln und Provider-Tabelle der Post-Prüfung, lesende Datenbankzugriffe mit fester Feldliste, Modulversion, Jest-Konfiguration |
 | `libraries/ysocial/upstream-check/` | Logik des Workflows `ysocial-upstream-check` (Basis lesen, Versionen vergleichen, Duplikate erkennen, Issue-Text), Tests und erfundene Testdaten |
 
 Die Statusroute antwortet ohne konfiguriertes `YSOCIAL_SERVICE_TOKEN` mit 503, ohne oder mit falschem Bearer-Token mit 401, mit dem richtigen mit 200. Die globalen Postiz-Guards lassen neue Controller durch. Der eigene Guard ist deshalb Pflicht für jeden ysocial-Controller. Ein Test prüft das für jeden Controller in `apps/backend/src/ysocial/`.

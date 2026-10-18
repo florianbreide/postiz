@@ -8,6 +8,10 @@ Gemeinsamer Code für die ysocial-Ordner in Backend und Orchestrator.
 - `src/worker/worker.status.ts`: Zustand des Workers in Redis (`ysocial:worker:status`). Der Orchestrator schreibt, das Backend liest.
 - `src/events/hub.event.ts`: Format der Ereignisse an den Hub, feste Kennung, Bereinigung der Gründe. Läuft auch in Temporal-Workflows, deshalb ohne Node.js-Importe.
 - `src/events/hub.client.ts`: `POST /api/internal/events` an den Hub, mit Einordnung der Antworten in „wiederholen“ und „endgültig“.
+- `src/verification/post.verification.ts`: Regeln von `PostVerification` nach E22 als reine Funktionen. Läuft im Workflow, ohne Node.js-Importe.
+- `src/verification/provider.rules.ts`: Tabelle je Provider, welche Antwort von `postAnalytics` „gibt es“ und welche „gibt es nicht“ heißt.
+- `src/verification/ysocial.post.verification.service.ts`: liest Posts und prüft einen Post über `postAnalytics`. Der Kanal-Token bleibt in dieser Klasse.
+- `src/database/ysocial.post.repository.ts`: lesende Prisma-Abfragen auf `Post` mit fester Feldliste.
 - `jest.config.js`: Jest für die ysocial-Ordner. Aufruf aus dem Repo-Root mit Node 22: `pnpm exec jest -c libraries/ysocial/jest.config.js`.
 - `upstream-check/`: Logik des Workflows `.github/workflows/ysocial-upstream-check.yml`, dazu Tests und erfundene Testdaten. Reines ESM ohne Abhängigkeiten, denn der Workflow lädt nur diesen Ordner und installiert nichts. Jest lässt die Tests aus. Aufruf aus dem Repo-Root mit Node 22: `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs`.
 

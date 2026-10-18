@@ -20,6 +20,8 @@ export interface YsocialWorkerStatusRecord {
   reason?: string;
   namespace?: string;
   taskQueue?: string;
+  // Whether the schedules of the worker exist (from PR 17).
+  schedules?: 'ready' | 'error';
   since: string;
   updatedAt: string;
   version: string;
@@ -32,6 +34,7 @@ export interface YsocialWorkerStatusView {
   reason?: string;
   namespace?: string;
   taskQueue?: string;
+  schedules?: 'ready' | 'error';
   since?: string;
   updatedAt?: string;
 }
@@ -100,6 +103,7 @@ export const toWorkerStatusView = (
     ...(record.reason ? { reason: record.reason } : {}),
     ...(record.namespace ? { namespace: record.namespace } : {}),
     ...(record.taskQueue ? { taskQueue: record.taskQueue } : {}),
+    ...(record.schedules ? { schedules: record.schedules } : {}),
     since: record.since,
     updatedAt: record.updatedAt,
   };

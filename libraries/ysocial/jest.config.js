@@ -24,6 +24,9 @@ module.exports = {
   // ysocial code may import Postiz services by their aliases from
   // tsconfig.base.json. Our own library is imported with relative paths.
   moduleNameMapper: {
+    // No database in the tests, and no .env loaded by Prisma (see the stub).
+    '^@prisma/client$':
+      '<rootDir>/libraries/ysocial/jest/prisma-client.stub.js',
     '^@gitroom/nestjs-libraries/(.*)$':
       '<rootDir>/libraries/nestjs-libraries/src/$1',
     '^@gitroom/helpers/(.*)$': '<rootDir>/libraries/helpers/src/$1',
