@@ -8,6 +8,11 @@
 # upstream check. The digest goes into the job summary; the hub pins
 # POSTIZ_IMAGE by tag and digest.
 #
+# The tag <base>-ys-<commit12> is immutable: if GHCR already has it, build
+# and manifest skip the build and report the existing digest; `main` still
+# follows the head of main. The input `force` rebuilds and moves the tag to
+# a new digest, as before.
+#
 # build-containers.yml from Postiz stays disabled and unchanged. This file
 # follows its layout: one job per architecture, then the manifest.
 #
@@ -20,6 +25,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      force:
+        description: Neu bauen, auch wenn es den Tag schon gibt. Der Tag zeigt danach auf einen neuen Digest.
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -47,6 +57,8 @@ jobs:
       contents: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      exists: ${{ steps.existing.outputs.exists }}
+      digest: ${{ steps.existing.outputs.digest }}
     steps:
       # Cone mode always includes files in the repo root (YSOCIAL-PATCHES.md).
       - name: Checkout
@@ -71,9 +83,62 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # Reads the tag without credentials, like "Check anonymous pull"; the
+      # package is public (PLAN B17). Runs of the same commit wait for each
+      # other (concurrency), so this sees the result of the previous run.
+      # Only 404 means "not there yet". Any other answer stops the run, so a
+      # failed check never moves the tag.
+      - name: Existing tag
+        id: existing
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = true ]; then
+            echo "::notice::force: $IMAGE:$TAG wird neu gebaut, auch wenn es den Tag schon gibt."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          repo="${IMAGE#ghcr.io/}"
+          if ! token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -er .token); then
+            echo "::error::Kein anonymer Lesezugriff auf $IMAGE. Ist das Paket öffentlich (PLAN B17)? Ohne Prüfung kein Bau. Bewusster Neubau: Lauf von Hand mit force."
+            exit 1
+          fi
+          # Single-image types too: GHCR answers 404 for a tag whose type is
+          # not accepted, and such a tag must not count as missing.
+          index="$RUNNER_TEMP/existing-index.json"
+          status=$(curl -sS -o "$index" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/$repo/manifests/$TAG")
+
+          case "$status" in
+            404)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            200)
+              platforms=$(jq -r '[(.manifests // [])[].platform | "\(.os)/\(.architecture)"] | sort | join(",")' "$index")
+              if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+                echo "::error::$IMAGE:$TAG gibt es schon, aber mit den Plattformen \"$platforms\". Bewusster Neubau: Lauf von Hand mit force."
+                exit 1
+              fi
+              digest="sha256:$(sha256sum "$index" | cut -d' ' -f1)"
+              echo "::notice::$IMAGE:$TAG gibt es schon ($digest). Kein neuer Bau. Bewusster Neubau: Lauf von Hand mit force."
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::GHCR antwortet für $IMAGE:$TAG mit HTTP $status. Ohne Prüfung kein Bau. Bewusster Neubau: Lauf von Hand mit force."
+              exit 1
+              ;;
+          esac
+
   build:
     name: build (${{ matrix.arch }})
     needs: meta
+    # Skipped when the tag already exists.
+    if: needs.meta.outputs.exists == 'false'
     strategy:
       fail-fast: true
       matrix:
@@ -131,6 +196,12 @@ jobs:
   manifest:
     name: manifest
     needs: [meta, build]
+    # Also runs when build was skipped because the tag exists: it reports the
+    # existing digest and moves `main` if needed.
+    if: >-
+      !cancelled() && needs.meta.result == 'success'
+      && (needs.build.result == 'success'
+      || (needs.build.result == 'skipped' && needs.meta.outputs.exists == 'true'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -145,10 +216,15 @@ jobs:
 
       # `main` moves only while this commit is still the head of main. A
       # re-run of an older run, or one that finishes late, leaves it alone.
+      # If the tag exists, it stays on its digest and only `main` follows
+      # the head of main to that digest. A single index as source is copied
+      # unchanged, the check below confirms the digest.
       - name: Create manifest
         id: manifest
         env:
           TAG: ${{ needs.meta.outputs.tag }}
+          EXISTS: ${{ needs.meta.outputs.exists }}
+          EXISTING_DIGEST: ${{ needs.meta.outputs.digest }}
         run: |
           on_main=false
           if [ "$GITHUB_REF" = refs/heads/main ]; then
@@ -160,16 +236,22 @@ jobs:
             fi
           fi
 
-          tags=(-t "$IMAGE:$TAG")
-          if [ "$on_main" = true ]; then
-            tags+=(-t "$IMAGE:main")
-          fi
+          if [ "$EXISTS" = true ]; then
+            if [ "$on_main" = true ]; then
+              docker buildx imagetools create -t "$IMAGE:main" "$IMAGE@$EXISTING_DIGEST"
+            fi
+          else
+            tags=(-t "$IMAGE:$TAG")
+            if [ "$on_main" = true ]; then
+              tags+=(-t "$IMAGE:main")
+            fi
 
-          docker buildx imagetools create "${tags[@]}" \
-            --annotation "index:org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            "$IMAGE:$TAG-amd64" \
-            "$IMAGE:$TAG-arm64"
+            docker buildx imagetools create "${tags[@]}" \
+              --annotation "index:org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+              "$IMAGE:$TAG-amd64" \
+              "$IMAGE:$TAG-arm64"
+          fi
 
           platforms=$(docker buildx imagetools inspect --raw "$IMAGE:$TAG" \
             | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(",")')
@@ -181,6 +263,10 @@ jobs:
           digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
           if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::Digest nicht lesbar: $digest"
+            exit 1
+          fi
+          if [ "$EXISTS" = true ] && [ "$digest" != "$EXISTING_DIGEST" ]; then
+            echo "::error::$IMAGE:$TAG zeigt auf $digest, meta hat $EXISTING_DIGEST gelesen"
             exit 1
           fi
           if [ "$on_main" = true ]; then
@@ -219,10 +305,19 @@ jobs:
           ON_MAIN: ${{ steps.manifest.outputs.main }}
           DIGEST: ${{ steps.manifest.outputs.digest }}
           PUBLIC: ${{ steps.public.outputs.public }}
+          EXISTS: ${{ needs.meta.outputs.exists }}
+          FORCE: ${{ inputs.force }}
         run: |
           also_main=""
           if [ "$ON_MAIN" = true ]; then
             also_main=" und \`main\`"
+          fi
+          if [ "$EXISTS" = true ]; then
+            build="übersprungen, den Tag gab es schon"
+          elif [ "$FORCE" = true ]; then
+            build="neu gebaut mit \`force\`"
+          else
+            build="neu gebaut"
           fi
           {
             echo "## Fork-Image"
@@ -232,6 +327,7 @@ jobs:
             echo "| Image | \`$IMAGE\` |"
             echo "| Tag | \`$TAG\`$also_main |"
             echo "| Digest | \`$DIGEST\` |"
+            echo "| Bau | $build |"
             echo "| Commit | \`$GITHUB_SHA\` (\`$GITHUB_REF_NAME\`) |"
             echo "| Plattformen | linux/amd64, linux/arm64 |"
             echo "| Ohne Anmeldung abrufbar | $PUBLIC |"
