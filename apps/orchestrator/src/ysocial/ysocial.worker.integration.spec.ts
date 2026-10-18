@@ -164,7 +164,11 @@ describeIt('ysocial worker on a real Temporal server', () => {
     snapshots.set(publishedPost, snapshot(publishedPost, 'PUBLISHED'));
 
     temporal = new YsocialTemporalClient();
-    const activities = new YsocialActivities(fakeVerification as any, temporal);
+    const activities = new YsocialActivities(
+      fakeVerification as any,
+      temporal,
+      {} as any
+    );
     service = new SourceWorkerService(activities, temporal);
     const store: YsocialStatusStore = {
       get: async () => undefined,
@@ -191,10 +195,16 @@ describeIt('ysocial worker on a real Temporal server', () => {
         .terminate('end of test')
         .catch((): undefined => undefined);
     }
-    await client?.schedule
-      .getHandle('ysocial-post-verification')
-      .delete()
-      .catch((): undefined => undefined);
+    for (const id of [
+      'ysocial-post-verification',
+      'ysocial-channel-check',
+      'ysocial-daily-health',
+    ]) {
+      await client?.schedule
+        .getHandle(id)
+        .delete()
+        .catch((): undefined => undefined);
+    }
     await service?.beforeApplicationShutdown();
     await temporal?.beforeApplicationShutdown();
     await connection?.close();
@@ -276,6 +286,25 @@ describeIt('ysocial worker on a real Temporal server', () => {
     });
     expect(schedule.spec.intervals?.[0].every).toBe(60_000);
     expect(schedule.policies.overlap).toBe('SKIP');
+  });
+
+  it('plans the next DailyHealth for 07:00 in Berlin (PR 18 QA 2)', async () => {
+    const schedule = await client.schedule
+      .getHandle('ysocial-daily-health')
+      .describe();
+    expect(schedule.spec.timezone).toBe('Europe/Berlin');
+    const next = schedule.info.nextActionTimes[0];
+    const berlin = new Intl.DateTimeFormat('de-DE', {
+      timeZone: 'Europe/Berlin',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(next);
+    expect(berlin).toBe('07:00');
+
+    const hourly = await client.schedule
+      .getHandle('ysocial-channel-check')
+      .describe();
+    expect(hourly.info.nextActionTimes[0].getUTCMinutes()).toBe(15);
   });
 
   it('starts one verification per post and reports both posts to the hub', async () => {

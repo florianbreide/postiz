@@ -26,6 +26,30 @@ export class YsocialPostRepository {
     });
   }
 
+  // DailyHealth: first posts in ERROR with a date in the window.
+  findFailedPosts(from: Date, to: Date) {
+    return this._post.model.post.findMany({
+      where: {
+        publishDate: { gte: from, lte: to },
+        deletedAt: null,
+        parentPostId: null,
+        state: 'ERROR',
+      },
+      select: {
+        id: true,
+        organizationId: true,
+        integrationId: true,
+        publishDate: true,
+        error: true,
+        integration: {
+          select: { providerIdentifier: true, customerId: true },
+        },
+      },
+      orderBy: { publishDate: 'asc' },
+      take: 500,
+    });
+  }
+
   getPostForVerification(id: string) {
     return this._post.model.post.findUnique({
       where: { id },

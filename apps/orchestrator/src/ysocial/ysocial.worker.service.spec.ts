@@ -15,6 +15,7 @@ import { Logger } from '@nestjs/common';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { restartDelay, YsocialWorkerService } from './ysocial.worker.service';
 import { YsocialActivities } from './ysocial.activities';
+import { ysocialSchedules } from './ysocial.schedules';
 import {
   YSOCIAL_WORKER_STATUS_KEY,
   YsocialWorkerStatusRecord,
@@ -48,7 +49,10 @@ class TestWorkerService extends YsocialWorkerService {
   };
 
   constructor() {
-    super(new YsocialActivities({} as any, {} as any), undefined as any);
+    super(
+      new YsocialActivities({} as any, {} as any, {} as any),
+      undefined as any
+    );
     (this as any)._temporal = this.temporal;
     this.statusStore = {
       get: async () => undefined,
@@ -255,7 +259,10 @@ describe('YsocialWorkerService', () => {
     expect(service.scheduleCreate).toHaveBeenCalledTimes(1);
 
     await jest.advanceTimersByTimeAsync(30_000);
-    expect(service.scheduleCreate).toHaveBeenCalledTimes(2);
+    // First try failed at the first schedule, the second creates all.
+    expect(service.scheduleCreate).toHaveBeenCalledTimes(
+      1 + ysocialSchedules('ysocial-postiz').length
+    );
     expect(service.lastStatus).toMatchObject({
       state: 'running',
       schedules: 'ready',

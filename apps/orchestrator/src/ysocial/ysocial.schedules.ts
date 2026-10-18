@@ -36,6 +36,46 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
       catchupWindow: '1 minute',
     },
   },
+  {
+    // PLAN 3.3 PR 18: hourly, database fields only. A quarter past, so it
+    // never meets DailyHealth at 07:00.
+    scheduleId: 'ysocial-channel-check',
+    spec: { intervals: [{ every: '1 hour', offset: '15 minutes' }] },
+    action: {
+      type: 'startWorkflow',
+      workflowType: 'ysocialChannelCheckWorkflow',
+      workflowId: 'ysocial-channel-check',
+      taskQueue,
+      args: [],
+      workflowExecutionTimeout: '10 minutes',
+    },
+    policies: {
+      overlap: ScheduleOverlapPolicy.SKIP,
+      catchupWindow: '10 minutes',
+    },
+  },
+  {
+    // PLAN 3.3 PR 18: DailyHealth at 07:00 in Berlin. The hub sends its
+    // summary at 07:05 (E38).
+    scheduleId: 'ysocial-daily-health',
+    spec: {
+      calendars: [{ hour: 7, minute: 0 }],
+      timezone: 'Europe/Berlin',
+    },
+    action: {
+      type: 'startWorkflow',
+      workflowType: 'ysocialDailyHealthWorkflow',
+      workflowId: 'ysocial-daily-health',
+      taskQueue,
+      args: [],
+      workflowExecutionTimeout: '1 hour',
+    },
+    policies: {
+      overlap: ScheduleOverlapPolicy.SKIP,
+      // If the worker was down at 07:00, run as soon as it is back, up to 09:00.
+      catchupWindow: '2 hours',
+    },
+  },
 ];
 
 export const ensureYsocialSchedules = async (

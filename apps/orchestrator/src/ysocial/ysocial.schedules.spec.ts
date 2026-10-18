@@ -18,6 +18,33 @@ describe('ysocial schedules', () => {
     expect(verification.policies).toMatchObject({ overlap: 'SKIP' });
   });
 
+  it('runs DailyHealth at 07:00 Europe/Berlin', () => {
+    const daily = schedules.find(
+      (s) => s.scheduleId === 'ysocial-daily-health'
+    )!;
+    expect(daily.spec).toEqual({
+      calendars: [{ hour: 7, minute: 0 }],
+      timezone: 'Europe/Berlin',
+    });
+    expect(daily.action).toMatchObject({
+      workflowType: 'ysocialDailyHealthWorkflow',
+      taskQueue: 'ysocial-postiz',
+    });
+    expect(daily.policies).toMatchObject({ overlap: 'SKIP' });
+  });
+
+  it('checks the channels every hour at a quarter past', () => {
+    const hourly = schedules.find(
+      (s) => s.scheduleId === 'ysocial-channel-check'
+    )!;
+    expect(hourly.spec).toEqual({
+      intervals: [{ every: '1 hour', offset: '15 minutes' }],
+    });
+    expect(hourly.action).toMatchObject({
+      workflowType: 'ysocialChannelCheckWorkflow',
+    });
+  });
+
   it('all start ysocial workflows, never with search attributes', () => {
     for (const schedule of schedules) {
       expect(schedule.scheduleId).toMatch(/^ysocial-/);
