@@ -103,7 +103,7 @@ Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleib
 | Orchestrator | `curl http://localhost:3002/health/status` | `{"status":"ok"}` |
 | Registrierung gesperrt | `curl http://localhost:3000/auth/can-register` | `{"register":false}`, sobald ein Nutzer existiert |
 | ysocial ohne Token | `curl -i http://localhost:3000/ysocial/status` | `401` (ohne `YSOCIAL_SERVICE_TOKEN` in der `.env`: `503`) |
-| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.1.0"}` |
+| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.2.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
 | Temporal-UI | `http://localhost:8080` im Browser | Namespace `default` sichtbar |
 
 Statusroute mit Token, ohne ihn auszugeben. Nur für dich im eigenen Terminal. Claude führt das nicht aus, weil Claude die `.env` nie liest.
@@ -128,7 +128,17 @@ Die Datei hat die Rechte 600 und steht in `.git/info/exclude` (siehe „Lokale D
 
     corepack pnpm exec jest -c libraries/ysocial/jest.config.js
 
-Erwartet: 2 Test-Suiten, 19 Tests grün. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+Erwartet (Stand PR 16): 10 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+
+## ysocial-Worker lokal (ab PR 16)
+
+Der ysocial-Worker im Orchestrator braucht einen eigenen Namespace in Temporal und drei Variablen. Ohne sie läuft Postiz normal, der Worker bleibt aus.
+
+1. Namespace einmalig anlegen: `docker exec temporal temporal operator namespace create --namespace ysocial --address temporal:7233`. Antwort: `Namespace ysocial successfully registered.` Meldet die CLI, dass sie `temporal:7233` nicht erreicht, nimm `--address 127.0.0.1:7233`. Nach `down` und neuem `up` fehlt er wieder (anonyme Volumes, siehe unten).
+2. Test gegen das lokale Temporal, ohne `.env` und ohne laufendes Postiz: `YSOCIAL_IT_TEMPORAL_ADDRESS=localhost:7233 corepack pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.worker.integration`. Der Test startet den echten Worker, einen Mock-Hub und einen Ping. Erwartet: 1 Test grün.
+3. Worker im laufenden Orchestrator, optional: In der `.env` `HUB_INTERNAL_URL="http://localhost:3999"`, `HUB_INTERNAL_TOKEN` (Ausgabe von `openssl rand -hex 32`) und `YSOCIAL_TEMPORAL_NAMESPACE="ysocial"` eintragen und `pnpm run dev` neu starten. Im Log steht `ysocial worker running (namespace ysocial, queue ysocial-postiz)`. Unter `localhost:3999` läuft lokal kein Hub. Ein Ping (`docker exec temporal temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialPingWorkflow --workflow-id ysocial-ping-lokal --address temporal:7233`) wiederholt deshalb die Zustellung, bis du den Workflow `ysocial-event-…` in der Temporal-UI beendest.
+
+Die Variablen und das Format der Ereignisse beschreibt `apps/orchestrator/src/ysocial/README.md`.
 
 ## Stoppen
 

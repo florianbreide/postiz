@@ -5,8 +5,8 @@ Diese Datei enthält nur den Patch-Stand und Verweise. Status, Termine und offen
 ## Patch-Stand
 
 - Basis: upstream v2.25.1 (11.10.2026)
-- Patches: 1 von höchstens 5 (`apps/backend/src/app.module.ts`, `YsocialModule`)
-- Geplant: 1 Patch im Orchestrator in Phase 1 (`PostVerification`, `DailyHealth`)
+- Patches: 2 von höchstens 5 (`apps/backend/src/app.module.ts`, `YsocialModule`; `apps/orchestrator/src/app.module.ts`, `YsocialOrchestratorModule`)
+- Geplant: Patch 3 für verschlüsselte Kanal-Tokens in Phase 1 (PR 25)
 - Details und neue Dateien außerhalb der ysocial-Ordner: `YSOCIAL-PATCHES.md`
 
 ## Verweise

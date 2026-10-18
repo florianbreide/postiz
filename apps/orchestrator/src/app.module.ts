@@ -10,6 +10,8 @@ import { MediaActivity } from '@gitroom/orchestrator/activities/media.activity';
 import { ClippingActivity } from '@gitroom/orchestrator/activities/clipping.activity';
 import { VideoModule } from '@gitroom/nestjs-libraries/videos/video.module';
 import { HealthController } from '@gitroom/orchestrator/health.controller';
+// ysocial patch 2 (YSOCIAL-PATCHES.md)
+import { YsocialOrchestratorModule } from '@gitroom/orchestrator/ysocial/ysocial.orchestrator.module';
 
 const activities = [
   PostActivity,
@@ -25,6 +27,7 @@ const activities = [
     DatabaseModule,
     VideoModule,
     getTemporalModule(true, require.resolve('./workflows'), activities),
+    YsocialOrchestratorModule,
   ],
   controllers: [HealthController],
   providers: [...activities],
