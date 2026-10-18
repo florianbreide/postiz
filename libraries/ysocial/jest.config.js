@@ -19,8 +19,7 @@ module.exports = {
   ],
   testEnvironment: 'node',
   testMatch: ['**/*.spec.ts'],
-  // ts-jest type-checks every file. With one worker per core a worker was
-  // too slow to exit after the run and got killed. Half the cores is enough.
+  // ts-jest type-checks every file, half the cores is enough.
   maxWorkers: '50%',
   // ysocial code may import Postiz services by their aliases from
   // tsconfig.base.json. Our own library is imported with relative paths.

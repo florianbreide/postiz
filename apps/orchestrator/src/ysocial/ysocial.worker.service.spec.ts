@@ -1,3 +1,10 @@
+// The test replaces connect and createWorker. Without this mock the native
+// Temporal core would load and keep the Jest worker from exiting in time.
+jest.mock('@temporalio/worker', () => ({
+  NativeConnection: { connect: jest.fn() },
+  Worker: { create: jest.fn() },
+}));
+
 import { randomBytes } from 'crypto';
 import { Logger } from '@nestjs/common';
 import { NativeConnection, Worker } from '@temporalio/worker';
