@@ -16,6 +16,8 @@ import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialModule } from './ysocial.module';
 import { YsocialStatusController } from './ysocial.status.controller';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
+import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
+import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
 
 const ENV = 'YSOCIAL_SERVICE_TOKEN';
 const token = randomBytes(32).toString('hex');
@@ -179,10 +181,91 @@ describe('GET /ysocial/status', () => {
     process.env[ENV] = token;
     const res = await get(`Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    expect(await res.json()).toMatchObject({
       ok: true,
       module: 'ysocial',
       version: YSOCIAL_MODULE_VERSION,
+    });
+  });
+
+  // Tests run without REDIS_URL, so ioRedis is Postiz's in-memory mock.
+  describe('worker', () => {
+    const hubEnv = [
+      'HUB_INTERNAL_URL',
+      'HUB_INTERNAL_TOKEN',
+      'YSOCIAL_TEMPORAL_NAMESPACE',
+    ];
+    const saved = hubEnv.map((name) => process.env[name]);
+
+    beforeEach(async () => {
+      process.env[ENV] = token;
+      hubEnv.forEach((name) => delete process.env[name]);
+      await ioRedis.del(YSOCIAL_WORKER_STATUS_KEY);
+    });
+
+    afterAll(() => {
+      hubEnv.forEach((name, i) =>
+        saved[i] === undefined
+          ? delete process.env[name]
+          : (process.env[name] = saved[i])
+      );
+    });
+
+    it('reports "Worker aus" with the reason when HUB_INTERNAL_TOKEN is missing', async () => {
+      process.env.HUB_INTERNAL_URL = 'http://hub-web:3000';
+      process.env.YSOCIAL_TEMPORAL_NAMESPACE = 'ysocial';
+      const body = await (await get(`Bearer ${token}`)).json();
+      expect(body.ok).toBe(true);
+      expect(body.worker).toEqual({
+        running: false,
+        label: 'Worker aus',
+        state: 'unknown',
+        reason: 'HUB_INTERNAL_TOKEN fehlt oder ist kürzer als 32 Zeichen',
+      });
+      expect(JSON.stringify(body)).not.toContain('hub-web');
+    });
+
+    it('reports what the orchestrator wrote', async () => {
+      await ioRedis.set(
+        YSOCIAL_WORKER_STATUS_KEY,
+        JSON.stringify({
+          state: 'running',
+          namespace: 'ysocial',
+          taskQueue: 'ysocial-postiz',
+          since: '2026-10-19T07:00:00.000Z',
+          updatedAt: '2026-10-19T07:00:30.000Z',
+          version: YSOCIAL_MODULE_VERSION,
+        })
+      );
+      const body = await (await get(`Bearer ${token}`)).json();
+      expect(body.worker).toEqual({
+        running: true,
+        label: 'Worker an',
+        state: 'running',
+        namespace: 'ysocial',
+        taskQueue: 'ysocial-postiz',
+        since: '2026-10-19T07:00:00.000Z',
+        updatedAt: '2026-10-19T07:00:30.000Z',
+      });
+    });
+
+    it('reports "Worker aus" when the orchestrator says off', async () => {
+      await ioRedis.set(
+        YSOCIAL_WORKER_STATUS_KEY,
+        JSON.stringify({
+          state: 'off',
+          reason: 'YSOCIAL_WORKER_ENABLED=false',
+          since: '2026-10-19T07:00:00.000Z',
+          updatedAt: '2026-10-19T07:00:30.000Z',
+          version: YSOCIAL_MODULE_VERSION,
+        })
+      );
+      const body = await (await get(`Bearer ${token}`)).json();
+      expect(body.worker).toMatchObject({
+        running: false,
+        label: 'Worker aus',
+        reason: 'YSOCIAL_WORKER_ENABLED=false',
+      });
     });
   });
 });

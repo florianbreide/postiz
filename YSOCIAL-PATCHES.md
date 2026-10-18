@@ -16,15 +16,16 @@ Diese Datei listet jede Abweichung unseres Forks von Postiz. Sie ist die Grundla
 
 ## Stand
 
-**Patches: 1 von höchstens 5**
+**Patches: 2 von höchstens 5**
 
-Geplant: Phase 1 braucht einen Patch im Orchestrator (`apps/orchestrator/src/app.module.ts`) für `PostVerification` und `DailyHealth` (W7). Danach sind 2 von 5 belegt.
+Geplant in Phase 1: Patch 3 in `libraries/nestjs-libraries/src/database/prisma/prisma.service.ts` für verschlüsselte Kanal-Tokens (PLAN Phase 1, E24, PR 25). Danach sind 3 von 5 belegt.
 
 ## Tabelle 1: Geänderte Postiz-Dateien (Patches)
 
 | Datei | Stelle | Grund | seit |
 |---|---|---|---|
 | `apps/backend/src/app.module.ts` | Import von `YsocialModule` (2 Zeilen, Kommentar „ysocial patch 1“) und Eintrag `YsocialModule` am Ende von `imports` | Hängt das ysocial-Modul in das Backend ein. Ohne diese Stelle lädt Nest keinen eigenen Controller | 17.10.2026, PR 2 (`phase-0/basis`) |
+| `apps/orchestrator/src/app.module.ts` | Import von `YsocialOrchestratorModule` (2 Zeilen, Kommentar „ysocial patch 2“) und Eintrag `YsocialOrchestratorModule` am Ende von `imports` | Hängt den eigenen Temporal-Worker in den Orchestrator ein (E33). Postiz-Workflows laufen nur auf der Queue `main` aus `workflows/index.ts`, eigene Workflows brauchen einen eigenen Worker. `workflows/index.ts` bleibt unverändert (E6) | 18.10.2026, PR 16 (`phase-1/worker`) |
 
 ## Tabelle 2: Neue Dateien außerhalb der ysocial-Ordner
 
@@ -42,20 +43,24 @@ Geplant: Phase 1 braucht einen Patch im Orchestrator (`apps/orchestrator/src/app
 
 | Ordner | Inhalt |
 |---|---|
-| `apps/backend/src/ysocial/` | `YsocialModule`, `GET /ysocial/status` hinter `YsocialTokenGuard`, Test |
-| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Modulversion, Jest-Konfiguration |
+| `apps/backend/src/ysocial/` | `YsocialModule`, `GET /ysocial/status` hinter `YsocialTokenGuard` mit dem Zustand des Workers, Tests |
+| `apps/orchestrator/src/ysocial/` | `YsocialOrchestratorModule`: eigener Temporal-Worker (Namespace `ysocial`, Queue `ysocial-postiz`), Aktivitäten und Workflows mit Präfix `ysocial`, Ereignisse an den Hub, Tests. Beschreibung in `README.md` dort |
+| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Konfiguration und Zustand des Workers, Ereignisse an den Hub, Modulversion, Jest-Konfiguration |
 | `libraries/ysocial/upstream-check/` | Logik des Workflows `ysocial-upstream-check` (Basis lesen, Versionen vergleichen, Duplikate erkennen, Issue-Text), Tests und erfundene Testdaten |
-| `apps/orchestrator/src/ysocial/` | Nur `README.md`. Inhalt kommt in Phase 1 |
 
 Die Statusroute antwortet ohne konfiguriertes `YSOCIAL_SERVICE_TOKEN` mit 503, ohne oder mit falschem Bearer-Token mit 401, mit dem richtigen mit 200. Die globalen Postiz-Guards lassen neue Controller durch. Der eigene Guard ist deshalb Pflicht für jeden ysocial-Controller. Ein Test prüft das für jeden Controller in `apps/backend/src/ysocial/`.
 
-Tests: `pnpm exec jest -c libraries/ysocial/jest.config.js` (Node 22). Das Root-`jest.config.ts` von Postiz braucht `@nx/jest`, das nicht installiert ist. Die Upstream-Prüfung hat eigene Tests ohne Abhängigkeiten, Jest lässt sie aus: `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs` (Node 22, ohne Netz).
+Tests: `pnpm exec jest -c libraries/ysocial/jest.config.js` (Node 22). Das Root-`jest.config.ts` von Postiz braucht `@nx/jest`, das nicht installiert ist. Der Test gegen einen echten Temporal-Server läuft nur mit `YSOCIAL_IT_TEMPORAL_ADDRESS`, siehe `apps/orchestrator/src/ysocial/README.md`. `@temporalio/testing` ist keine Postiz-Abhängigkeit, eine neue Abhängigkeit wäre ein Patch an `package.json`. Workflow-Tests laufen deshalb mit gemockten Temporal-Funktionen und simulierter Uhr. Die Upstream-Prüfung hat eigene Tests ohne Abhängigkeiten, Jest lässt sie aus: `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs` (Node 22, ohne Netz).
 
 ## Umgebungsvariablen des Forks
 
 | Variable | Pflicht | Wert | fehlt oder zu kurz |
 |---|---|---|---|
 | `YSOCIAL_SERVICE_TOKEN` | ja | Zufallswert, mindestens 32 Zeichen, zum Beispiel `openssl rand -hex 32` | `/ysocial/status` antwortet mit 503 (fail-closed) |
+| `HUB_INTERNAL_URL` | für den Worker | Adresse des Hubs im Docker-Netz, zum Beispiel `http://hub-web:3000`. Keine Zugangsdaten in der Adresse | ysocial-Worker startet nicht, Postiz läuft weiter, `/ysocial/status` meldet „Worker aus“ |
+| `HUB_INTERNAL_TOKEN` | für den Worker | Gleicher Wert wie im Hub, mindestens 32 Zeichen | wie oben |
+| `YSOCIAL_TEMPORAL_NAMESPACE` | für den Worker | `ysocial`. Nie `default` oder der Wert von `TEMPORAL_NAMESPACE` | wie oben |
+| `YSOCIAL_WORKER_ENABLED` | nein | `false` schaltet den Worker ab. Ohne Wert läuft er, sobald die drei Variablen oben stimmen | – |
 
 Die `.env.example` von Postiz bleibt unverändert, eine Änderung wäre ein Patch. Die Vorlage für diese Variablen steht deshalb im Hub: in der `.env.example` (PR 3) und in `infra/` (PR 7). Dort erzeugt `scripts/gen-secrets.sh` den Wert. Hub und Postiz-Container bekommen denselben Wert. Lokal beschreibt `docs/YSOCIAL-LOKAL.md` den Eintrag. Jede neue Variable des Forks kommt in diese Tabelle und in die Hub-Vorlage.
 
