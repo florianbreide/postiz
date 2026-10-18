@@ -24,6 +24,8 @@ import {
   buildYsocialActivities,
   YsocialActivities,
 } from './ysocial.activities';
+import { YsocialTemporalClient } from './ysocial.temporal.client';
+import { ensureYsocialSchedules, ysocialSchedules } from './ysocial.schedules';
 
 const RESTART_MIN_MS = 30_000;
 const RESTART_MAX_MS = 10 * 60_000;
@@ -64,6 +66,8 @@ export const ysocialWorkerOptions = (
  * - No error of this worker ever ends the orchestrator. A failed start or a
  *   crashed worker is logged and started again with a growing pause.
  * - The state goes to Redis every 30 s for GET /ysocial/status (backend).
+ * - Once running, it creates or updates the schedules in ysocial.schedules.ts,
+ *   retrying with the same pauses until that worked.
  */
 @Injectable()
 export class YsocialWorkerService
@@ -76,12 +80,17 @@ export class YsocialWorkerService
   private _worker?: Worker;
   private _connection?: NativeConnection;
   private _heartbeat?: NodeJS.Timeout;
-  private _pause?: { timer: NodeJS.Timeout; resolve: () => void };
+  private _pauses = new Set<{ timer: NodeJS.Timeout; resolve: () => void }>();
   private _stopping = false;
   private _done?: Promise<void>;
   private _status?: YsocialWorkerStatusRecord;
+  private _schedules?: 'ready' | 'error';
+  private _schedulesRun?: Promise<void>;
 
-  constructor(private _activities: YsocialActivities) {}
+  constructor(
+    private _activities: YsocialActivities,
+    private _temporal: YsocialTemporalClient
+  ) {}
 
   onApplicationBootstrap() {
     // Not awaited: bundling the workflows takes seconds and must not hold up
@@ -96,10 +105,11 @@ export class YsocialWorkerService
     if (this._heartbeat) {
       clearInterval(this._heartbeat);
     }
-    if (this._pause) {
-      clearTimeout(this._pause.timer);
-      this._pause.resolve();
+    for (const pause of this._pauses) {
+      clearTimeout(pause.timer);
+      pause.resolve();
     }
+    this._pauses.clear();
     try {
       if (this._worker?.getState() === 'RUNNING') {
         this._worker.shutdown();
@@ -141,6 +151,11 @@ export class YsocialWorkerService
         this._worker = await this.createWorker(this._connection, config);
         await this.setStatus('running', undefined, config);
         attempt = 0;
+        if (this._schedules !== 'ready' && !this._schedulesRun) {
+          this._schedulesRun = this.ensureSchedules(config).finally(() => {
+            this._schedulesRun = undefined;
+          });
+        }
         this._logger.log(
           `ysocial worker running (namespace ${config.namespace}, queue ${config.taskQueue})`
         );
@@ -187,6 +202,41 @@ export class YsocialWorkerService
     );
   }
 
+  private async ensureSchedules(config: YsocialWorkerConfig) {
+    let attempt = 0;
+    while (!this._stopping) {
+      try {
+        const client = await this._temporal.get();
+        const result = await ensureYsocialSchedules(
+          client,
+          ysocialSchedules(config.taskQueue)
+        );
+        this._schedules = 'ready';
+        if (this._status) {
+          await this.writeStatus(this._status);
+        }
+        this._logger.log(
+          `ysocial schedules ready (created: ${
+            result.created.join(', ') || '-'
+          }, updated: ${result.updated.join(', ') || '-'})`
+        );
+        return;
+      } catch (err) {
+        this._schedules = 'error';
+        if (this._status) {
+          await this.writeStatus(this._status);
+        }
+        const delay = restartDelay(++attempt);
+        this._logger.error(
+          `ysocial schedules failed: ${describeError(
+            err
+          )}. Next try in ${Math.round(delay / 1000)} s`
+        );
+        await this.pause(delay);
+      }
+    }
+  }
+
   private startHeartbeat() {
     this._heartbeat = setInterval(() => {
       if (this._status) {
@@ -198,9 +248,15 @@ export class YsocialWorkerService
 
   private pause(ms: number) {
     return new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      timer.unref();
-      this._pause = { timer, resolve };
+      const pause = {
+        timer: setTimeout(() => {
+          this._pauses.delete(pause);
+          resolve();
+        }, ms),
+        resolve,
+      };
+      pause.timer.unref();
+      this._pauses.add(pause);
     });
   }
 
@@ -239,6 +295,9 @@ export class YsocialWorkerService
     try {
       await writeWorkerStatus(this.statusStore, {
         ...record,
+        ...(this._schedules && record.state === 'running'
+          ? { schedules: this._schedules }
+          : {}),
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {

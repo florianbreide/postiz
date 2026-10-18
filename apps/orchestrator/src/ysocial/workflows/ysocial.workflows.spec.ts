@@ -5,7 +5,10 @@ import { WorkflowExecutionAlreadyStartedError } from '@temporalio/common';
 // The Temporal workflow APIs only work inside a worker. Here they are mocked,
 // the workflow functions run as plain async functions.
 const mockStartChild = jest.fn();
-const mockActivities = { ysocialDeliverEvent: jest.fn() };
+const mockActivities = {
+  ysocialDeliverEvent: jest.fn(),
+  ysocialStartPostVerifications: jest.fn(),
+};
 const mockInfo = {
   workflowId: 'ysocial-ping-qa',
   startTime: new Date('2026-10-19T07:00:00.000Z'),
@@ -25,6 +28,7 @@ import * as ysocialWorkflows from './index';
 import { ysocialPingWorkflow } from './ysocial.ping.workflow';
 import { ysocialDeliverEventWorkflow } from './ysocial.deliver.event.workflow';
 import { emitHubEvent } from './ysocial.emit';
+import { ysocialPostVerificationWorkflow } from './ysocial.post.verification.workflow';
 
 const POSTIZ_WORKFLOWS = join(__dirname, '..', '..', 'workflows');
 
@@ -51,6 +55,7 @@ const postizWorkflowNames = () =>
 beforeEach(() => {
   mockStartChild.mockReset();
   mockActivities.ysocialDeliverEvent.mockReset();
+  mockActivities.ysocialStartPostVerifications.mockReset();
 });
 
 describe('ysocial workflows', () => {
@@ -60,6 +65,8 @@ describe('ysocial workflows', () => {
       expect.arrayContaining([
         'ysocialPingWorkflow',
         'ysocialDeliverEventWorkflow',
+        'ysocialPostVerificationWorkflow',
+        'ysocialVerifyPostWorkflow',
       ])
     );
     const postiz = postizWorkflowNames();
@@ -134,5 +141,30 @@ describe('ysocialDeliverEventWorkflow', () => {
       duplicate: false,
     });
     expect(mockActivities.ysocialDeliverEvent).toHaveBeenCalledWith(event);
+  });
+});
+
+describe('ysocialPostVerificationWorkflow', () => {
+  it('looks at the last 60 minutes when the schedule starts it', async () => {
+    mockActivities.ysocialStartPostVerifications.mockResolvedValue({
+      due: 2,
+      started: 1,
+      alreadyStarted: 1,
+    });
+    expect(await ysocialPostVerificationWorkflow()).toEqual({
+      due: 2,
+      started: 1,
+      alreadyStarted: 1,
+    });
+    expect(mockActivities.ysocialStartPostVerifications).toHaveBeenCalledWith({
+      windowMinutes: undefined,
+    });
+  });
+
+  it('passes a larger window from a run by hand', async () => {
+    await ysocialPostVerificationWorkflow({ windowMinutes: 2880 });
+    expect(mockActivities.ysocialStartPostVerifications).toHaveBeenCalledWith({
+      windowMinutes: 2880,
+    });
   });
 });

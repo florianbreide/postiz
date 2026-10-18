@@ -11,7 +11,16 @@
 
 export const HUB_EVENT_VERSION = 1;
 
-export const HUB_EVENT_KINDS = ['ping'] as const;
+export const HUB_EVENT_KINDS = [
+  'ping',
+  // PostVerification (PR 17, E22)
+  'post.failed',
+  'post.not_published',
+  'post.not_found',
+  'post.verified',
+  'post.unverifiable',
+  'post.resolved',
+] as const;
 
 export type HubEventKind = (typeof HUB_EVENT_KINDS)[number];
 

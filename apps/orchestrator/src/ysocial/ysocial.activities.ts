@@ -1,11 +1,39 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ApplicationFailure } from '@temporalio/common';
-import { readYsocialWorkerConfig } from '../../../../libraries/ysocial/src/worker/worker.config';
+import {
+  ApplicationFailure,
+  WorkflowExecutionAlreadyStartedError,
+} from '@temporalio/common';
+import { WorkflowStartOptions } from '@temporalio/client';
+import {
+  readYsocialWorkerConfig,
+  YSOCIAL_TASK_QUEUE,
+} from '../../../../libraries/ysocial/src/worker/worker.config';
 import { HubEvent } from '../../../../libraries/ysocial/src/events/hub.event';
 import {
   HubDeliveryError,
   postHubEvent,
 } from '../../../../libraries/ysocial/src/events/hub.client';
+import { YsocialPostVerificationService } from '../../../../libraries/ysocial/src/verification/ysocial.post.verification.service';
+import {
+  PlatformCheck,
+  PostVerificationSnapshot,
+} from '../../../../libraries/ysocial/src/verification/post.verification';
+import { YsocialTemporalClient } from './ysocial.temporal.client';
+
+export const verifyPostWorkflowId = (postId: string) =>
+  `ysocial-verify-${postId}`;
+
+// One verification per post: the workflow id is rejected as long as Temporal
+// keeps the closed run. No search attributes (E13).
+export const verifyPostStartOptions = (
+  postId: string,
+  taskQueue = YSOCIAL_TASK_QUEUE
+): WorkflowStartOptions => ({
+  workflowId: verifyPostWorkflowId(postId),
+  taskQueue,
+  args: [{ postId }],
+  workflowIdReusePolicy: 'REJECT_DUPLICATE',
+});
 
 /**
  * Activities of the ysocial worker. They run only on the task queue
@@ -15,10 +43,18 @@ import {
  * "ysocial", so no name can collide with a Postiz activity (PLAN R34). The
  * class has no @Activity decorator on purpose: nestjs-temporal-core must not
  * pick it up for the Postiz workers.
+ *
+ * Parameters are single objects, so a later field does not change the
+ * signature of an activity that running workflows already call.
  */
 @Injectable()
 export class YsocialActivities {
   private readonly _logger = new Logger('ysocial');
+
+  constructor(
+    private _verification: YsocialPostVerificationService,
+    private _temporal: YsocialTemporalClient
+  ) {}
 
   async ysocialDeliverEvent(
     event: HubEvent
@@ -55,6 +91,60 @@ export class YsocialActivities {
       }
       throw err;
     }
+  }
+
+  // PostVerification: starts ysocial-verify-<postId> for every due post.
+  // A post that already has its workflow is skipped by Temporal.
+  async ysocialStartPostVerifications(input?: {
+    windowMinutes?: number;
+  }): Promise<{ due: number; started: number; alreadyStarted: number }> {
+    const postIds = await this._verification.findPostIdsToVerify(
+      new Date(),
+      input?.windowMinutes
+    );
+    if (!postIds.length) {
+      return { due: 0, started: 0, alreadyStarted: 0 };
+    }
+
+    const client = await this._temporal.get();
+    const taskQueue =
+      readYsocialWorkerConfig(process.env).config?.taskQueue ||
+      YSOCIAL_TASK_QUEUE;
+    let started = 0;
+    let alreadyStarted = 0;
+    for (const postId of postIds) {
+      try {
+        await client.workflow.start(
+          'ysocialVerifyPostWorkflow',
+          verifyPostStartOptions(postId, taskQueue)
+        );
+        started++;
+      } catch (err) {
+        if (!(err instanceof WorkflowExecutionAlreadyStartedError)) {
+          throw err;
+        }
+        alreadyStarted++;
+      }
+    }
+
+    if (started) {
+      this._logger.log(
+        `post verification started for ${started} of ${postIds.length} posts`
+      );
+    }
+    return { due: postIds.length, started, alreadyStarted };
+  }
+
+  async ysocialLoadPostForVerification(input: {
+    postId: string;
+  }): Promise<PostVerificationSnapshot | null> {
+    return this._verification.loadSnapshot(input.postId);
+  }
+
+  async ysocialCheckPostOnPlatform(input: {
+    postId: string;
+  }): Promise<PlatformCheck> {
+    return this._verification.checkOnPlatform(input.postId);
   }
 }
 

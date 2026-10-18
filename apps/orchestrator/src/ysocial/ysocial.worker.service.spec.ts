@@ -5,6 +5,11 @@ jest.mock('@temporalio/worker', () => ({
   Worker: { create: jest.fn() },
 }));
 
+// The real IntegrationManager loads every provider, some of them ESM-only.
+jest.mock('@gitroom/nestjs-libraries/integrations/integration.manager', () => ({
+  IntegrationManager: class IntegrationManager {},
+}));
+
 import { randomBytes } from 'crypto';
 import { Logger } from '@nestjs/common';
 import { NativeConnection, Worker } from '@temporalio/worker';
@@ -35,8 +40,16 @@ class TestWorkerService extends YsocialWorkerService {
   worker = new FakeWorker();
   createdWith?: YsocialWorkerConfig;
 
+  scheduleCreate = jest.fn().mockResolvedValue({});
+  temporal = {
+    get: jest.fn(async () => ({
+      schedule: { create: this.scheduleCreate, getHandle: jest.fn() },
+    })),
+  };
+
   constructor() {
-    super(new YsocialActivities());
+    super(new YsocialActivities({} as any, {} as any), undefined as any);
+    (this as any)._temporal = this.temporal;
     this.statusStore = {
       get: async () => undefined,
       set: async (key: string, value: string) => {
@@ -208,6 +221,45 @@ describe('YsocialWorkerService', () => {
     await jest.advanceTimersByTimeAsync(30_000);
     expect(service.writes.length).toBe(before + 1);
     expect(service.lastStatus.state).toBe('off');
+    await service.beforeApplicationShutdown();
+  });
+
+  it('creates the schedules once the worker runs', async () => {
+    process.env = { ...process.env, ...configured };
+    const service = new TestWorkerService();
+    service.onApplicationBootstrap();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(service.scheduleCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleId: 'ysocial-post-verification' })
+    );
+    expect(service.lastStatus).toMatchObject({
+      state: 'running',
+      schedules: 'ready',
+    });
+    await service.beforeApplicationShutdown();
+  });
+
+  it('keeps the worker running and tries again when the schedules fail', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    process.env = { ...process.env, ...configured };
+    const service = new TestWorkerService();
+    service.scheduleCreate.mockRejectedValueOnce(
+      new Error('namespace not found')
+    );
+
+    service.onApplicationBootstrap();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(service.lastStatus.state).toBe('running');
+    expect(service.scheduleCreate).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(service.scheduleCreate).toHaveBeenCalledTimes(2);
+    expect(service.lastStatus).toMatchObject({
+      state: 'running',
+      schedules: 'ready',
+    });
     await service.beforeApplicationShutdown();
   });
 
