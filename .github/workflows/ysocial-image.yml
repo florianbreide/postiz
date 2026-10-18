@@ -143,7 +143,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             arch: amd64
           - runner: ubuntu-24.04-arm
             arch: arm64
