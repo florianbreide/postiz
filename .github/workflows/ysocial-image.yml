@@ -1,0 +1,242 @@
+# ysocial: build the fork image and push it to GHCR (E14, E34).
+#
+# Runs on every push to main (each merge) and by hand. Builds Dockerfile.dev
+# from Postiz unchanged, amd64 and arm64 on GitHub runners, and joins both
+# into one manifest ghcr.io/florianbreide/postiz:<base>-ys-<commit12>. Runs
+# on main also move the tag `main`, as long as the commit is still its head. The base version comes from the
+# "Basis:" line in YSOCIAL-PATCHES.md, read with the tested parser of the
+# upstream check. The digest goes into the job summary; the hub pins
+# POSTIZ_IMAGE by tag and digest.
+#
+# build-containers.yml from Postiz stays disabled and unchanged. This file
+# follows its layout: one job per architecture, then the manifest.
+#
+# Only GITHUB_TOKEN, no other secrets. Actions are pinned by commit SHA.
+
+name: ysocial image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+# Runs of the same commit wait for each other, so the per-architecture
+# tags of two runs never mix. Which commit `main` gets is decided in the
+# manifest job.
+concurrency:
+  group: ysocial-image-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/florianbreide/postiz
+
+# Explicit bash adds -o pipefail to the default -e.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  meta:
+    name: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      # Cone mode always includes files in the repo root (YSOCIAL-PATCHES.md).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: libraries/ysocial/upstream-check
+
+      - name: Image tag
+        id: tag
+        run: |
+          base=$(node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            import { parseBaseVersion } from './libraries/ysocial/upstream-check/ysocial-upstream-check.mjs';
+            console.log(parseBaseVersion(await readFile('YSOCIAL-PATCHES.md', 'utf8')));
+          ")
+          tag="${base}-ys-${GITHUB_SHA::12}"
+          # Docker tag rules; the -amd64/-arm64 suffix must still fit.
+          if ! [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,120}$ ]]; then
+            echo "::error::Kein gültiger Image-Tag: $tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.arch }})
+    needs: meta
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write # push the per-architecture image
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No binary cache: a release build does not read from the Actions cache.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false
+
+      - name: Login to ghcr
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # NEXT_PUBLIC_VERSION is shown in the Postiz sidebar and marks the
+      # build as self-hosted (public.component.tsx), as in the upstream image.
+      - name: Build and push image
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker buildx build --platform "linux/$ARCH" \
+            -f Dockerfile.dev \
+            --build-arg "NEXT_PUBLIC_VERSION=$TAG" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$TAG" \
+            --pull \
+            --no-cache \
+            --provenance=false --sbom=false \
+            --metadata-file "$RUNNER_TEMP/metadata.json" \
+            --output "type=registry,name=$IMAGE:$TAG-$ARCH,oci-mediatypes=true" .
+
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/metadata.json")
+          echo "$ARCH: \`$IMAGE:$TAG-$ARCH@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  manifest:
+    name: manifest
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write # push the manifest and the tags
+    steps:
+      - name: Login to ghcr
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # `main` moves only while this commit is still the head of main. A
+      # re-run of an older run, or one that finishes late, leaves it alone.
+      - name: Create manifest
+        id: manifest
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          on_main=false
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            head=$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+            if [ "$head" = "$GITHUB_SHA" ]; then
+              on_main=true
+            else
+              echo "::notice::main steht inzwischen auf ${head:0:12}. Der Tag main bleibt dort."
+            fi
+          fi
+
+          tags=(-t "$IMAGE:$TAG")
+          if [ "$on_main" = true ]; then
+            tags+=(-t "$IMAGE:main")
+          fi
+
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+            "$IMAGE:$TAG-amd64" \
+            "$IMAGE:$TAG-arm64"
+
+          platforms=$(docker buildx imagetools inspect --raw "$IMAGE:$TAG" \
+            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(",")')
+          if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+            echo "::error::Manifest hat die Plattformen \"$platforms\", erwartet linux/amd64,linux/arm64"
+            exit 1
+          fi
+
+          digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Digest nicht lesbar: $digest"
+            exit 1
+          fi
+          if [ "$on_main" = true ]; then
+            main_digest=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$main_digest" != "$digest" ]; then
+              echo "::error::Tag main zeigt auf $main_digest, erwartet $digest"
+              exit 1
+            fi
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "main=$on_main" >> "$GITHUB_OUTPUT"
+
+      # Reads the manifest without credentials, as docker pull would. A
+      # private package only warns: it is switched to public once by hand
+      # (PLAN B17).
+      - name: Check anonymous pull
+        id: public
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          repo="${IMAGE#ghcr.io/}"
+          if token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -er .token) \
+            && curl -fsS -o /dev/null \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/$repo/manifests/$TAG"; then
+            echo "public=ja" >> "$GITHUB_OUTPUT"
+          else
+            echo "public=nein" >> "$GITHUB_OUTPUT"
+            echo "::warning::Das Paket ist nicht öffentlich. Package settings, Change visibility, Public (PLAN B17 Schritt 2)."
+          fi
+
+      - name: Job summary
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          ON_MAIN: ${{ steps.manifest.outputs.main }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          PUBLIC: ${{ steps.public.outputs.public }}
+        run: |
+          also_main=""
+          if [ "$ON_MAIN" = true ]; then
+            also_main=" und \`main\`"
+          fi
+          {
+            echo "## Fork-Image"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`$IMAGE\` |"
+            echo "| Tag | \`$TAG\`$also_main |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Commit | \`$GITHUB_SHA\` (\`$GITHUB_REF_NAME\`) |"
+            echo "| Plattformen | linux/amd64, linux/arm64 |"
+            echo "| Ohne Anmeldung abrufbar | $PUBLIC |"
+            echo
+            echo "Für \`POSTIZ_IMAGE\` in der \`.env\` des Hubs:"
+            echo
+            echo "    $IMAGE:$TAG@$DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"
