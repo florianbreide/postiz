@@ -3,7 +3,7 @@
 Diese Datei listet jede Abweichung unseres Forks von Postiz. Sie ist die Grundlage für jeden Upstream-Sync.
 
 - Fork: `florianbreide/postiz`, Original: `gitroomhq/postiz-app` (Remote `upstream`)
-- Basis: upstream v2.25.1 (11.10.2026)
+- Basis: upstream v2.25.3 (24.10.2026)
 - Verbindliche Vorgabe: `docs/HANDOVER.md` im Repo `florianbreide/social-hub`
 
 ## Regeln
@@ -17,6 +17,8 @@ Diese Datei listet jede Abweichung unseres Forks von Postiz. Sie ist die Grundla
 ## Stand
 
 **Patches: 2 von höchstens 5**
+
+Letzter Sync: Sicherheits-Sync von v2.25.1 auf v2.25.3 am 11.11.2026 (Branch `upstream-sync/2026-11-security`). Beide Patches stehen unverändert an ihrer Stelle, der Merge lief ohne Konflikt.
 
 Geplant in Phase 1: Patch 3 in `libraries/nestjs-libraries/src/database/prisma/prisma.service.ts` für verschlüsselte Kanal-Tokens (PLAN Phase 1, E24, PR 25). Danach sind 3 von 5 belegt.
 
@@ -36,7 +38,7 @@ Geplant in Phase 1: Patch 3 in `libraries/nestjs-libraries/src/database/prisma/p
 | `docs/YSOCIAL-LOKAL.md` | Lokaler Start mit Node 22 und pnpm 10.6.1 | 17.10.2026, PR 2 |
 | `.claude/CLAUDE.md` | Regeln für Claude Code im Fork. Die Postiz-`CLAUDE.md` im Root bleibt unverändert (E16) | 17.10.2026, PR 2 |
 | `ROADMAP.md` | Nur Patch-Stand und Verweise. Der Status steht in der Hub-ROADMAP (E18) | 17.10.2026, PR 2 |
-| `.node-version` | Node 22 für `fnm` (E8) | 17.10.2026, PR 2 |
+| `.node-version` | Node für `fnm` (E8). Seit v2.25.3 verlangt `package.json` genau `22.23.4` (`engines`), die Datei nennt deshalb dieselbe Version | 17.10.2026, PR 2; `22.23.4` seit 11.11.2026, Sync auf v2.25.3 |
 | `.github/workflows/ysocial-upstream-check.yml` | Wöchentliche Prüfung auf ein neues Postiz-Release, öffnet ein Issue (E11). Die Logik liegt in `libraries/ysocial/upstream-check/` | 17.10.2026, PR 6 |
 | `.github/workflows/ysocial-image.yml` | Fork-Image aus `Dockerfile.dev` bei jedem Push auf `main` und von Hand, amd64 und arm64, nach `ghcr.io/florianbreide/postiz` (E14, E34). Tag `<Basis>-ys-<Commit, 12 Zeichen>`, auf `main` zusätzlich `main`. Der Tag ist unveränderlich: Gibt es ihn in GHCR schon, baut der Lauf nicht neu und nennt den vorhandenen Digest. Ist der Commit die Spitze von `main`, zeigt `main` danach auf diesen Digest. Ein Neubau unter demselben Tag geht nur von Hand mit `force`. Die Basis liest er wie die Upstream-Prüfung aus der Zeile „Basis:“ oben. Digest und Wert für `POSTIZ_IMAGE` stehen in der Zusammenfassung des Laufs. `build-containers.yml` von Postiz bleibt abgeschaltet und unverändert | 18.10.2026, PR 15; Tag unveränderlich seit 18.10.2026, Folge-PR `phase-1/image-tag` |
 
@@ -77,7 +79,8 @@ Die `.env.example` von Postiz bleibt unverändert, eine Änderung wäre ein Patc
 - Ist upstream neuer, öffnet er ein Issue „Postiz <tag> verfügbar“ mit Link, Datum und Checkliste. Gibt es schon ein offenes oder geschlossenes Issue des Workflows (`github-actions[bot]`) mit diesem Titel, legt er kein zweites an. Issues anderer Personen zählen nicht: Der Fork ist öffentlich, jeder kann ein Issue mit diesem Titel anlegen.
 - Das Label `sicherheit` setzt er nur bei einem eindeutigen Hinweis in Name oder Release-Notes eines Releases seit der Basis: „upgrade immediately“ oder eine Advisory-Nummer (`CVE-…`, `GHSA-…`, `PSA-…`). Dann gilt der Sicherheits-Sync.
 - Nennen die Notes nur „security“, „Sicherheit“ oder „vulnerab…“, steht im Issue „Bitte prüfen“, ohne Label. Diese Wörter treffen auch Releases, die das Thema nur streifen. Beispiel: v2.20.0 erwähnt Sicherheit nur bei einer korrigierten Kontaktadresse für Sicherheitsmeldungen. Ist es doch ein Sicherheitsfix, setzt du das Label selbst und synchronisierst sofort.
-- Häufigkeit: Seit März 2026 trägt fast jedes Release den Hinweis „upgrade immediately“, am 17.10.2026 waren es 5 der letzten 9 und 11 von 15 seit dem 20.03.2026. E11 ging von 2 der letzten 9 aus. Fast jedes Issue verlangt damit einen Sicherheits-Sync. Welche Frist dafür gilt und ob ein kürzerer Testplan reicht, ist eine offene Frage an Florian in der Hub-ROADMAP.
+- Häufigkeit: Seit März 2026 trägt fast jedes Release den Hinweis „upgrade immediately“, am 17.10.2026 waren es 5 der letzten 9 und 11 von 15 seit dem 20.03.2026. E11 ging von 2 der letzten 9 aus. Fast jedes Issue trägt damit das Label `sicherheit`.
+- **Regel ab 11.11.2026 (Florian):** Sofort-Sync nur, wenn ein Release seit der Basis eine Advisory-Nummer nennt (`PSA-…`, `CVE-…`, `GHSA-…`). Sonst gilt der Monats-Sync. Der Workflow setzt das Label weiterhin auch bei „upgrade immediately“ ohne Nummer. Dann prüfst du die Release-Notes: Steht keine Nummer darin, entfernst du das Label und synchronisierst zum Monatstermin. Der Testplan bleibt bei beiden Arten vollständig.
 - Der Workflow meldet ein Release spätestens am folgenden Montag, also bis zu 7 Tage später. Wer sofort Bescheid will, stellt bei `gitroomhq/postiz-app` „Watch“, „Custom“, „Releases“ ein. Das Issue bleibt die verbindliche Erinnerung mit Checkliste.
 - Der Workflow liest nur die Zeile `Basis: upstream vX.Y.Z (Datum)` oben. Fehlt sie, steht keine Version darin oder ist sie nicht eindeutig, schlägt der Lauf fehl. Das Format bleibt deshalb so. Dieselbe Basis steht in der Fork-`ROADMAP.md`, ein Test prüft das.
 - Manuell, erst wenn der Workflow auf `main` liegt: `gh workflow run ysocial-upstream-check.yml`, als Probelauf ohne Issue mit `-f dry_run=true`. Der Probelauf schreibt den Issue-Text ins Log.

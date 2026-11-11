@@ -6,7 +6,7 @@ Lokal verbindest du keinen echten Kanal. Es gibt keine Provider-Zugangsdaten in 
 
 ## Voraussetzungen
 
-- **Node 22** (mindestens 22.12, unter 23) per `fnm`. Die Datei `.node-version` im Repo enthält `22`. Node 26 ist auf dem Mac Standard, damit läuft Postiz nicht.
+- **Node 22.23.4** per `fnm`, einmalig `fnm install 22.23.4`. Seit v2.25.3 verlangt `package.json` genau diese Version (`engines`), die Datei `.node-version` im Repo nennt sie auch. Mit einer anderen Version bricht `pnpm install` ab. Node 26 ist auf dem Mac Standard, damit läuft Postiz nicht.
 - **pnpm 10.6.1** per corepack. Die Version kommt aus `packageManager` in `package.json`. `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` verhindert die Rückfrage beim ersten Mal.
 - **Docker mit Compose.** Auf deinem Mac fehlt das Compose-Plugin, `docker compose` meldet „unknown command“. Einmalig nachinstallieren:
   1. `brew install docker-compose`
@@ -24,7 +24,7 @@ Im Terminal (zsh):
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
     eval "$(fnm env --shell zsh)"
     fnm use
-    node -v                      # v22.x
+    node -v                      # v22.23.4
     corepack pnpm --version      # 10.6.1
     corepack pnpm install --frozen-lockfile
 
@@ -155,7 +155,7 @@ Die Variablen und das Format der Ereignisse beschreibt `apps/orchestrator/src/ys
 - **Temporal-Daten:** Temporal-Postgres und Elasticsearch nutzen in `docker-compose.dev.yaml` anonyme Volumes. Nach `down` und neuem `up` startet Temporal leer. Lokal geplante Posts haben dann keinen Workflow mehr. Die alten anonymen Volumes bleiben als „dangling“ liegen (`docker volume ls -f dangling=true`). Zum Pausieren `stop` nutzen.
 - **Port 3000 belegt:** Ein anderes lokales Projekt kann Port 3000 nutzen. Dann in der `.env` `PORT="3001"` setzen und `NEXT_PUBLIC_BACKEND_URL` und `BACKEND_INTERNAL_URL` auf `http://localhost:3001` ändern.
 - **Prisma liest eine `.env`:** Der generierte Prisma-Client lädt beim Import die Datei `.env` drei Ebenen über `node_modules/.prisma/client`, also die `.env` im Repo-Root. Zeigt `node_modules` in einem Worktree per Link auf den Haupt-Checkout, ist das die `.env` des Haupt-Checkouts. Jeder Prozess, der Postiz-Code mit Prisma startet, hat danach deren Werte in seiner Umgebung. Für Claude Code gilt deshalb (Entscheidung Florian, 18.10.2026): Lokale Proben im Fork nur in einem eigenen Worktree mit eigenem `node_modules` (`corepack pnpm install --frozen-lockfile`) und einer Wegwerf-`.env` mit erzeugten Testwerten. Nie Postiz-Prozesse starten, die die `.env` im Checkout `~/Projekte/postiz` laden können, also auch kein verlinktes `node_modules`. Keine Umgebung ausgeben. Die ysocial-Tests sind davon frei (Stub).
-- **Falsches Node:** Ohne `fnm use` läuft Node 26. Jede neue Shell braucht `eval "$(fnm env --shell zsh)"` und `fnm use`, oder `fnm exec --using=22 …` vor dem Befehl.
+- **Falsches Node:** Ohne `fnm use` läuft Node 26. Jede neue Shell braucht `eval "$(fnm env --shell zsh)"` und `fnm use`, oder `fnm exec --using=22.23.4 …` vor dem Befehl.
 - **Anmeldung im Browser:** Postiz setzt das Cookie `auth` mit `secure`. Chrome und Firefox akzeptieren das auf `http://localhost`. Safari ist ungeprüft. Klappt die Anmeldung dort nicht, nutze Chrome.
 - **Medien lokal:** Ohne den nginx aus dem Postiz-Image liefert lokal niemand `/uploads/…` aus. Vorschauen hochgeladener Bilder sind lokal ungeprüft. Instagram und TikTok holen Medien ohnehin per öffentlicher URL, Test-Posts laufen deshalb auf Staging (E7).
 - **Nicht gebaute Pakete:** pnpm 10 führt nur das Build-Skript von `bcrypt` aus. `canvas` und andere bleiben ungebaut. Start, Anmeldung und Statusroute laufen trotzdem. Funktionen, die `canvas` brauchen, sind lokal ungeprüft.
