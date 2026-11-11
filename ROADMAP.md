@@ -16,5 +16,6 @@ Diese Datei enthält nur den Patch-Stand und Verweise. Status, Termine und offen
 - Upstream-Sync: `YSOCIAL-PATCHES.md`, Prüfliste `docs/STAGING-TESTPLAN.md`
 - Upstream-Prüfung: Workflow `.github/workflows/ysocial-upstream-check.yml`, jeden Montag, Issue „Postiz <tag> verfügbar“ (Abschnitt „Auslöser“ in `YSOCIAL-PATCHES.md`). Logik und Tests: `libraries/ysocial/upstream-check/`
 - Fork-Image: Workflow `.github/workflows/ysocial-image.yml`, bei jedem Push auf `main` und von Hand, Image `ghcr.io/florianbreide/postiz`. Digest in der Zusammenfassung des Laufs
+- Tests: Workflow `.github/workflows/ysocial-tests.yml`, bei jedem PR auf `main` und von Hand: ysocial-Tests, Bau von Backend und Orchestrator, Secret-Scan der PR-Commits
 - Lokaler Start: `docs/YSOCIAL-LOKAL.md`
 - Regeln für Claude Code: `.claude/CLAUDE.md`

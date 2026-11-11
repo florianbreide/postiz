@@ -1,0 +1,129 @@
+# ysocial: tests of the fork's own code on every pull request.
+#
+# Runs the ysocial Jest suites (libraries/ysocial/jest.config.js), the tests
+# of the upstream check (node --test, no network) and builds backend and
+# orchestrator, so ysocial code is compiled against the Postiz version of the
+# branch (matters most for upstream-sync PRs). The frontend is built by
+# `ysocial image`. The root `pnpm test` of Postiz does not run upstream
+# (@nx/jest is missing), see YSOCIAL-PATCHES.md.
+#
+# The secret scan runs gitleaks over the commits the fork added in the PR.
+# Upstream commits (also those a sync PR merges) are left out, see the step.
+#
+# No .env, no database, no Temporal: the tests stub @prisma/client and mock
+# Temporal. Only GITHUB_TOKEN with read access. Actions are pinned by commit SHA.
+
+name: ysocial tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ysocial-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  CHECKPOINT_DISABLE: "1"
+  NX_ADD_PLUGINS: "false"
+
+# Explicit bash adds -o pipefail to the default -e.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Version from packageManager in package.json (10.6.1).
+      - name: pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      # package.json pins the exact Node version (engines), .node-version names it too.
+      - name: Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install (lockfile unchanged)
+        run: pnpm install --frozen-lockfile
+
+      - name: ysocial tests (Jest)
+        run: pnpm exec jest -c libraries/ysocial/jest.config.js
+
+      - name: Upstream check tests (node --test)
+        run: node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs
+
+      - name: Build backend
+        run: pnpm run build:backend
+
+      - name: Build orchestrator
+        run: pnpm run build:orchestrator
+
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The binary with a fixed version and checksum, like the hub. The
+      # gitleaks action needs a licence for organisation repos, the binary
+      # does not (MIT).
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      # Only commits the fork added: pull request range (or everything since
+      # the base tag when run by hand), minus every commit reachable from the
+      # upstream base tag named in YSOCIAL-PATCHES.md of the checked-out head.
+      # A sync PR raises that base, so the upstream commits it merges are left
+      # out (they hold known false positives, e.g. hashes in i18n.lock).
+      - name: Scan commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          base=$(node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            import { parseBaseVersion } from './libraries/ysocial/upstream-check/ysocial-upstream-check.mjs';
+            console.log(parseBaseVersion(await readFile('YSOCIAL-PATCHES.md', 'utf8')));
+          ")
+          git fetch --no-tags https://github.com/gitroomhq/postiz-app.git "+refs/tags/$base:refs/tags/$base"
+          if [ -n "$BASE_SHA" ]; then
+            range="$BASE_SHA..$HEAD_SHA --not refs/tags/$base"
+          else
+            range="refs/tags/$base..HEAD"
+          fi
+          echo "Scanning $range"
+          "$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 --log-opts="$range" .
