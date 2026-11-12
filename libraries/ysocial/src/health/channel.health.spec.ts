@@ -424,6 +424,85 @@ describe('diffChannels', () => {
       });
     });
 
+    it('takes over the token the platform rejected last, ids stay (daily)', () => {
+      const E2 = NOW + 60 * DAY;
+      const E3 = NOW + 90 * DAY;
+      const day1 = reported();
+      expect(day1.next['int-1'].tokenExpiration).toBe(OLD_EXP);
+
+      // Day 2: a new token (E2), the platform still refuses it.
+      const day2 = diffChannels({
+        previous: day1.next,
+        channels: [renamed({ tokenExpiration: new Date(E2) })],
+        now: NOW + DAY,
+        authInvalid: { 'int-1': 'x' },
+      });
+      expect(day2.events).toEqual([]);
+      expect(day2.next['int-1']).toEqual({
+        ...day1.next['int-1'],
+        tokenExpiration: E2,
+      });
+      expect(day2.next['int-1'].since).toBe(day1.next['int-1'].since);
+      expect(day2.next['int-1'].updatedAt).toBe(UPDATED);
+
+      // Redis round trip, then the hourly check with the same token.
+      const stored = JSON.parse(JSON.stringify(day2.next));
+      const hourly = diffChannels({
+        previous: stored,
+        channels: [renamed({ tokenExpiration: new Date(E2) })],
+        now: NOW + DAY + 3600_000,
+      });
+      expect(hourly.events).toEqual([]);
+      expect(hourly.next).toEqual(stored);
+
+      // A token after E2 ends it, the id carries the start of day 1.
+      const E3_UPDATED = NOW + DAY + 2 * 3600_000;
+      const closed = diffChannels({
+        previous: hourly.next,
+        channels: [
+          renamed({
+            tokenExpiration: new Date(E3),
+            updatedAt: new Date(E3_UPDATED),
+          }),
+        ],
+        now: NOW + DAY + 3 * 3600_000,
+      });
+      expect(kinds(closed.events)).toEqual(['channel.reconnected']);
+      expect(closed.events[0].id).toBe(
+        `channel.reconnected:int-1:${E3_UPDATED}-${NOW}`
+      );
+      expect(closed.next).toEqual({});
+    });
+
+    it('lets a state of 0.7.4 learn the token on the next rejection', () => {
+      const old = {
+        'int-1': {
+          kind: 'channel.auth_invalid' as const,
+          updatedAt: UPDATED,
+          since: '2026-10-26T06:00:00.000Z',
+        },
+      };
+      const daily = diffChannels({
+        previous: old,
+        channels: [renamed()],
+        now: NOW,
+        authInvalid: { 'int-1': 'x' },
+      });
+      expect(daily.events).toEqual([]);
+      expect(daily.next['int-1']).toEqual({
+        ...old['int-1'],
+        tokenExpiration: OLD_EXP,
+      });
+
+      const closed = diffChannels({
+        previous: daily.next,
+        channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+        now: NOW + 3600_000,
+      });
+      expect(kinds(closed.events)).toEqual(['channel.reconnected']);
+      expect(closed.next).toEqual({});
+    });
+
     describe('state that went through Redis as JSON', () => {
       const viaRedis = (state: ReturnType<typeof reported>['next']) =>
         JSON.parse(JSON.stringify(state));
@@ -598,6 +677,45 @@ describe('problemChanges', () => {
     });
   });
 
+  it('has both states when only tokenExpiration changed', () => {
+    const previous = {
+      'int-1': problem({ tokenExpiration: NOW }),
+      'int-2': problem({ tokenExpiration: NOW }),
+      'int-3': problem({ tokenExpiration: null }),
+      'int-4': problem(),
+    };
+    expect(
+      problemChanges(previous, {
+        'int-1': problem({ tokenExpiration: NOW + DAY }),
+        'int-2': problem({ tokenExpiration: NOW }),
+        'int-3': problem({ tokenExpiration: null }),
+        'int-4': problem(),
+      })
+    ).toEqual({
+      'int-1': {
+        before: problem({ tokenExpiration: NOW }),
+        after: problem({ tokenExpiration: NOW + DAY }),
+      },
+    });
+  });
+
+  it('tells undefined, null and a date apart', () => {
+    const previous = {
+      'int-1': problem(),
+      'int-2': problem({ tokenExpiration: null }),
+      'int-3': problem({ tokenExpiration: NOW }),
+    };
+    expect(
+      Object.keys(
+        problemChanges(previous, {
+          'int-1': problem({ tokenExpiration: null }),
+          'int-2': problem(),
+          'int-3': problem({ tokenExpiration: null }),
+        })
+      )
+    ).toEqual(['int-1', 'int-2', 'int-3']);
+  });
+
   it('has no state after for a solved channel', () => {
     expect(
       problemChanges(
@@ -644,6 +762,33 @@ describe('applyProblemChanges', () => {
     expect(
       applyProblemChanges({ 'int-1': changed, 'int-2': problem(9) }, changes)
     ).toEqual({ 'int-1': changed, 'int-2': problem(9) });
+  });
+
+  it('keeps a channel whose tokenExpiration is not the one the run started from', () => {
+    const withToken = (tokenExpiration?: number | null) => ({
+      ...problem(1),
+      ...(tokenExpiration === undefined ? {} : { tokenExpiration }),
+    });
+    const changes: ChannelProblemChanges = {
+      'int-1': { before: withToken(NOW), after: null },
+      'int-2': { before: withToken(NOW), after: withToken(NOW + DAY) },
+      'int-3': { before: withToken(undefined), after: withToken(NOW) },
+      'int-4': { before: withToken(null), after: withToken(NOW) },
+    };
+    const current = {
+      'int-1': withToken(NOW + 2 * DAY),
+      'int-2': withToken(NOW),
+      'int-3': withToken(null),
+      'int-4': withToken(undefined),
+    };
+    const result = applyProblemChanges(current, changes);
+    // int-2 has the state the run started from, the others do not.
+    expect(result).toEqual({
+      'int-1': withToken(NOW + 2 * DAY),
+      'int-2': withToken(NOW + DAY),
+      'int-3': withToken(null),
+      'int-4': withToken(undefined),
+    });
   });
 
   it('gives the same state when applied twice', () => {

@@ -1189,4 +1189,139 @@ describe('"Zugang ungültig" ends only with a new token or a passed call', () =>
       expect(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]).toBeUndefined();
     });
   });
+
+  describe('V101 from start to end, with a new token that is rejected too', () => {
+    const E2 = new Date(NOW.getTime() + 60 * DAY);
+    const E3 = new Date(NOW.getTime() + 90 * DAY);
+    const rejected = () => jest.fn().mockRejectedValue(AUTH_ERROR);
+    const withE2 = () =>
+      row('int-x', { updatedAt: renamedAt, tokenExpiration: E2 });
+    const HOUR = new Date(NOW.getTime() + 3600_000);
+
+    it('prepareDailyHealth, saveProblemChanges, then the hourly checks', async () => {
+      const ctx = setup([withE2()], { facebook: { analytics: rejected() } });
+      ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify(open());
+
+      const { events, changes } = await ctx.service.prepareDailyHealth(NOW);
+      expect(kinds(events)).toEqual(['health.daily']);
+      expect(changes['int-x'].before).toEqual(open()['int-x']);
+      expect(changes['int-x'].after).toEqual({
+        ...open()['int-x'],
+        tokenExpiration: E2.getTime(),
+      });
+
+      // Temporal hands the changes on as JSON.
+      await ctx.service.saveProblemChanges(JSON.parse(JSON.stringify(changes)));
+      expect(
+        JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])['int-x']
+          .tokenExpiration
+      ).toBe(E2.getTime());
+
+      ctx.integrations.getChannels.mockResolvedValue([withE2()]);
+      expect((await ctx.service.checkChannels(HOUR)).events).toEqual([]);
+
+      ctx.integrations.getChannels.mockResolvedValue([
+        row('int-x', {
+          updatedAt: new Date(NOW.getTime() + 2000),
+          tokenExpiration: E3,
+        }),
+      ]);
+      const closed = await ctx.service.checkChannels(
+        new Date(HOUR.getTime() + 3600_000)
+      );
+      expect(kinds(closed.events)).toEqual(['channel.reconnected']);
+      expect(JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])).toEqual({});
+    });
+
+    it('runDailyHealth, then the hourly checks', async () => {
+      const ctx = setup([withE2()], { facebook: { analytics: rejected() } });
+      ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify(open());
+
+      const { events } = await ctx.service.runDailyHealth(NOW);
+      expect(kinds(events)).toEqual(['health.daily']);
+      expect(
+        JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])['int-x']
+      ).toEqual({ ...open()['int-x'], tokenExpiration: E2.getTime() });
+
+      ctx.integrations.getChannels.mockResolvedValue([withE2()]);
+      expect((await ctx.service.checkChannels(HOUR)).events).toEqual([]);
+
+      ctx.integrations.getChannels.mockResolvedValue([
+        row('int-x', {
+          updatedAt: new Date(NOW.getTime() + 2000),
+          tokenExpiration: E3,
+        }),
+      ]);
+      const closed = await ctx.service.checkChannels(
+        new Date(HOUR.getTime() + 3600_000)
+      );
+      expect(kinds(closed.events)).toEqual(['channel.reconnected']);
+    });
+  });
+
+  describe('transition from 0.7.4', () => {
+    // What 0.7.4 put into changes: no tokenExpiration.
+    const legacy = {
+      kind: 'channel.auth_invalid' as const,
+      updatedAt: UPDATED,
+      since: '2026-10-26T06:00:00.000Z',
+    };
+    const newToken = () =>
+      row('int-x', {
+        updatedAt: renamedAt,
+        tokenExpiration: new Date(NOW.getTime() + 60 * DAY),
+      });
+
+    it('stores the state without the field and closes only with a passed call', async () => {
+      const analytics = jest.fn().mockResolvedValue([]);
+      const ctx = setup([newToken()], { facebook: { analytics } });
+
+      await ctx.service.saveProblemChanges(
+        JSON.parse(JSON.stringify({ 'int-x': { before: null, after: legacy } }))
+      );
+      const stored = JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]);
+      expect(stored).toEqual({ 'int-x': legacy });
+      expect(stored['int-x']).not.toHaveProperty('tokenExpiration');
+
+      const hourly = await ctx.service.checkChannels(
+        new Date(NOW.getTime() + 3600_000)
+      );
+      expect(hourly.events).toEqual([]);
+      expect(JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])).toEqual(
+        stored
+      );
+
+      const { events, changes } = await ctx.service.prepareDailyHealth(NOW);
+      expect(kinds(events)).toEqual(['channel.reconnected', 'health.daily']);
+      expect((changes as any)['int-x'].after).toBeNull();
+    });
+  });
+
+  describe('tokenExpiration stays out of the events', () => {
+    it('is in neither the problem nor the way back as ms or ISO string', async () => {
+      const exp = new Date(NOW.getTime() + 40 * DAY);
+      const newer = new Date(NOW.getTime() + 90 * DAY);
+      const ctx = setup([row('int-x', { tokenExpiration: exp })], {
+        facebook: { analytics: jest.fn().mockRejectedValue(AUTH_ERROR) },
+      });
+      const daily = await ctx.service.runDailyHealth(NOW);
+      expect(kinds(daily.events)).toContain('channel.auth_invalid');
+
+      ctx.integrations.getChannels.mockResolvedValue([
+        row('int-x', { updatedAt: renamedAt, tokenExpiration: newer }),
+      ]);
+      const hourly = await ctx.service.checkChannels(
+        new Date(NOW.getTime() + 3600_000)
+      );
+      expect(kinds(hourly.events)).toEqual(['channel.reconnected']);
+
+      // No channel.token_expiring here, both expiries are beyond 7 days.
+      const text = JSON.stringify([...daily.events, ...hourly.events]);
+      for (const date of [exp, newer]) {
+        expect(text).not.toContain(String(date.getTime()));
+        expect(text).not.toContain(date.toISOString());
+      }
+      expect(text).not.toContain(TOKEN);
+    });
+  });
 });
