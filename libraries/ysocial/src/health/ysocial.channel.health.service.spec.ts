@@ -13,6 +13,11 @@ import {
   YsocialChannelHealthService,
 } from './ysocial.channel.health.service';
 import { ChannelRow } from './channel.health';
+import {
+  initialVerificationMemory,
+  nextVerificationStep,
+  PostVerificationSnapshot,
+} from '../verification/post.verification';
 
 // Invented channels and a fake token, which must never come back.
 const TOKEN = 'EAAG-fake-token-for-tests';
@@ -193,6 +198,7 @@ describe('DailyHealth', () => {
           organizationId: 'org-1',
           integrationId: 'int-off',
           publishDate: new Date('2026-10-25T09:00:00.000Z'),
+          updatedAt: new Date('2026-10-25T09:00:30.000Z'),
           error: 'failed: https://graph.facebook.com/x?access_token=EAAGsecret',
           integration: { providerIdentifier: 'facebook', customerId: null },
         },
@@ -210,7 +216,9 @@ describe('DailyHealth', () => {
     ]);
     expect(events[0].reason).toContain('Zugang ungültig');
     expect(events[3].id).toBe(
-      `post.failed:post-err:${Date.parse('2026-10-25T09:00:00.000Z')}`
+      `post.failed:post-err:${Date.parse(
+        '2026-10-25T09:00:00.000Z'
+      )}-${Date.parse('2026-10-25T09:00:30.000Z')}`
     );
     const summaryEvent = events[4];
     expect(summaryEvent.id).toBe('health.daily:postiz:2026-10-27');
@@ -229,6 +237,71 @@ describe('DailyHealth', () => {
     const text = JSON.stringify(events);
     expect(text).not.toContain('EAAGsecret');
     expect(text).not.toContain(TOKEN);
+  });
+
+  describe('ids of post.failed', () => {
+    const failedPost = (updatedAt: string) => ({
+      id: 'post-err',
+      organizationId: 'org-1',
+      integrationId: 'int-1',
+      publishDate: new Date('2026-10-25T09:00:00.000Z'),
+      updatedAt: new Date(updatedAt),
+      error: 'failed',
+      integration: {
+        providerIdentifier: 'facebook',
+        customerId: null as string | null,
+      },
+    });
+    const failedIds = async (updatedAt: string, now: Date) => {
+      const { service } = setup([], {}, [failedPost(updatedAt)]);
+      const { events } = await service.runDailyHealth(now);
+      return events.filter((e) => e.kind === 'post.failed').map((e) => e.id);
+    };
+
+    it('is the same on two days for an unchanged row', async () => {
+      const a = await failedIds('2026-10-25T09:00:30.000Z', NOW);
+      const b = await failedIds(
+        '2026-10-25T09:00:30.000Z',
+        new Date(NOW.getTime() + DAY)
+      );
+      expect(a).toHaveLength(1);
+      expect(b).toEqual(a);
+    });
+
+    it('is new for a row with a new updatedAt', async () => {
+      const a = await failedIds('2026-10-25T09:00:30.000Z', NOW);
+      const b = await failedIds('2026-10-26T10:00:00.000Z', NOW);
+      expect(b).toHaveLength(1);
+      expect(b).not.toEqual(a);
+    });
+
+    it('is the id PostVerification forms for the same post', async () => {
+      const snapshot: PostVerificationSnapshot = {
+        id: 'post-err',
+        organizationId: 'org-1',
+        integrationId: 'int-1',
+        state: 'ERROR',
+        publishDate: '2026-10-25T09:00:00.000Z',
+        deleted: false,
+        releaseURL: null,
+        error: 'failed',
+        updatedAt: '2026-10-25T09:00:30.000Z',
+        integration: {
+          providerIdentifier: 'facebook',
+          customerId: null,
+          disconnected: false,
+        },
+      };
+      const verification = nextVerificationStep({
+        postId: 'post-err',
+        snapshot,
+        now: Date.parse('2026-10-25T09:01:00.000Z'),
+        memory: initialVerificationMemory(),
+        failedPerAttempt: true,
+      });
+      const daily = await failedIds(snapshot.updatedAt, NOW);
+      expect(verification.events.map((e) => e.id)).toEqual(daily);
+    });
   });
 
   it('lists failed calls without auth error as "unklar", without alarm', async () => {

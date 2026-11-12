@@ -8,6 +8,8 @@ import { createHubEvent, HubEvent, HubEventKind } from '../events/hub.event';
  * "wieder verbunden" and "entfernt" (state in Redis, see
  * ysocial.channel.health.service.ts). Ids come from the channel and its
  * updatedAt: the same state gives the same id, a reconnect a new one.
+ * "Zugang ungültig" leaves updatedAt as it is, so its id and the one of the
+ * way back also carry `since`, the run that first saw the problem.
  */
 
 export const TOKEN_EXPIRY_WARN_MS = 7 * 24 * 60 * 60_000;
@@ -35,6 +37,7 @@ export interface ChannelProblemState {
   kind: ChannelProblemKind;
   // updatedAt of the channel when the problem was reported, in ms.
   updatedAt: number;
+  // Run that first reported the problem. Kept while the problem lasts.
   since: string;
 }
 
@@ -67,6 +70,8 @@ export const tokenExpiry = (row: ChannelRow, now: number) => {
 };
 
 const updatedMs = (row: ChannelRow) => row.updatedAt?.getTime() || 0;
+
+const sinceMs = (state: ChannelProblemState) => Date.parse(state.since) || 0;
 
 export const channelEvent = (
   kind: HubEventKind,
@@ -168,11 +173,13 @@ export const diffChannels = (input: {
       if (before?.kind === 'channel.auth_invalid') {
         next[row.id] = before;
       } else {
+        // A new problem after channel.reconnected keeps updatedAt. since,
+        // this run, tells the two apart.
         events.push(
           channelEvent(
             'channel.auth_invalid',
             row,
-            String(updated),
+            `${updated}-${now}`,
             now,
             `Zugang ungültig: Die Plattform lehnt den gespeicherten Zugang ab. ${
               authInvalid[row.id]
@@ -199,7 +206,7 @@ export const diffChannels = (input: {
         channelEvent(
           'channel.reconnected',
           row,
-          String(updated),
+          `${updated}-${sinceMs(before!)}`,
           now,
           'Der Kanal ist wieder verbunden.',
           { previous: before!.kind }
