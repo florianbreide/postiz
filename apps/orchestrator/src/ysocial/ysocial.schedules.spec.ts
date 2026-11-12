@@ -27,7 +27,7 @@ describe('ysocial schedules', () => {
       timezone: 'Europe/Berlin',
     });
     expect(daily.action).toMatchObject({
-      workflowType: 'ysocialDailyHealthWorkflow',
+      workflowType: 'ysocialDailyHealthWorkflowV101',
       taskQueue: 'ysocial-postiz',
     });
     expect(daily.policies).toMatchObject({ overlap: 'SKIP' });
@@ -49,7 +49,7 @@ describe('ysocial schedules', () => {
     for (const schedule of schedules) {
       expect(schedule.scheduleId).toMatch(/^ysocial-/);
       expect(String(schedule.action.workflowType)).toMatch(
-        /^ysocial\w+Workflow$/
+        /^ysocial\w+Workflow(V\d+)?$/
       );
       expect(Object.keys(schedule.action)).not.toEqual(
         expect.arrayContaining(['searchAttributes'])
@@ -88,6 +88,46 @@ describe('ysocial schedules', () => {
       created: schedules.map((s) => s.scheduleId),
       updated: [],
     });
+  });
+
+  it('switches an existing DailyHealth schedule to V101 and keeps its state', async () => {
+    const update = jest.fn(async (fn: (previous: any) => any) =>
+      fn({
+        spec: { intervals: [{ every: '5 minutes' }] },
+        action: {
+          type: 'startWorkflow',
+          workflowType: 'ysocialDailyHealthWorkflow',
+          workflowId: 'ysocial-daily-health',
+          taskQueue: 'ysocial-postiz',
+          args: [],
+        },
+        state: { paused: true },
+      })
+    );
+    const create = jest
+      .fn()
+      .mockRejectedValueOnce(
+        new ScheduleAlreadyRunning('exists', 'ysocial-daily-health')
+      )
+      .mockResolvedValue({});
+    const handle = jest.fn(() => ({ update }));
+    const client = { schedule: { create, getHandle: handle } } as any;
+    const daily = schedules.filter(
+      (s) => s.scheduleId === 'ysocial-daily-health'
+    );
+
+    const result = await ensureYsocialSchedules(client, daily);
+
+    expect(result.updated).toEqual(['ysocial-daily-health']);
+    expect(handle).toHaveBeenCalledWith('ysocial-daily-health');
+    const updated = await update.mock.results[0].value;
+    expect(updated.action).toMatchObject({
+      workflowType: 'ysocialDailyHealthWorkflowV101',
+      taskQueue: 'ysocial-postiz',
+    });
+    expect(updated.spec).toEqual(daily[0].spec);
+    expect(updated.policies).toEqual(daily[0].policies);
+    expect(updated.state).toEqual({ paused: true });
   });
 
   it('passes other errors on', async () => {

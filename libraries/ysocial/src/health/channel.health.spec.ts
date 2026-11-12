@@ -1,8 +1,11 @@
 import {
+  applyProblemChanges,
   berlinDay,
   channelFlag,
+  ChannelProblemChanges,
   ChannelRow,
   diffChannels,
+  problemChanges,
   tokenExpiringEvent,
   tokenExpiry,
 } from './channel.health';
@@ -328,5 +331,93 @@ describe('berlinDay', () => {
     expect(berlinDay(Date.parse('2026-10-26T05:00:00.000Z'))).toBe(
       '2026-10-26'
     );
+  });
+});
+
+describe('problemChanges', () => {
+  const problem = (patch = {}) => ({
+    kind: 'channel.auth_invalid' as const,
+    updatedAt: NOW - DAY,
+    since: String(NOW),
+    ...patch,
+  });
+
+  it('is empty for an unchanged state', () => {
+    const state = { 'int-1': problem(), 'int-2': problem() };
+    expect(problemChanges(state, { ...state })).toEqual({});
+    expect(problemChanges({}, {})).toEqual({});
+  });
+
+  it('has the new state of a new channel', () => {
+    expect(problemChanges({}, { 'int-1': problem() })).toEqual({
+      'int-1': problem(),
+    });
+  });
+
+  it('has the new state when kind, since or updatedAt changed', () => {
+    const previous = { 'int-1': problem(), 'int-2': problem() };
+    expect(
+      problemChanges(previous, {
+        'int-1': problem({ since: String(NOW + DAY) }),
+        'int-2': problem(),
+      })
+    ).toEqual({ 'int-1': problem({ since: String(NOW + DAY) }) });
+    expect(
+      problemChanges(previous, {
+        'int-1': problem({ updatedAt: NOW }),
+        'int-2': problem({ kind: 'channel.disconnected' }),
+      })
+    ).toEqual({
+      'int-1': problem({ updatedAt: NOW }),
+      'int-2': problem({ kind: 'channel.disconnected' }),
+    });
+  });
+
+  it('has null for a solved channel', () => {
+    expect(
+      problemChanges(
+        { 'int-1': problem(), 'int-2': problem() },
+        {
+          'int-2': problem(),
+        }
+      )
+    ).toEqual({ 'int-1': null });
+  });
+});
+
+describe('applyProblemChanges', () => {
+  const problem = (n: number) => ({
+    kind: 'channel.auth_invalid' as const,
+    updatedAt: NOW - DAY,
+    since: String(n),
+  });
+
+  it('sets and deletes only the named channels', () => {
+    const current = {
+      'int-1': problem(1),
+      'int-2': problem(2),
+      'int-3': problem(3),
+    };
+    expect(
+      applyProblemChanges(current, { 'int-1': null, 'int-4': problem(4) })
+    ).toEqual({
+      'int-2': problem(2),
+      'int-3': problem(3),
+      'int-4': problem(4),
+    });
+    expect(Object.keys(current)).toEqual(['int-1', 'int-2', 'int-3']);
+  });
+
+  it('gives the same state when applied twice', () => {
+    const changes: ChannelProblemChanges = {
+      'int-1': null,
+      'int-2': problem(9),
+    };
+    const once = applyProblemChanges({ 'int-1': problem(1) }, changes);
+    expect(applyProblemChanges(once, changes)).toEqual(once);
+  });
+
+  it('ignores a deletion of a channel that is not there', () => {
+    expect(applyProblemChanges({}, { 'int-1': null })).toEqual({});
   });
 });

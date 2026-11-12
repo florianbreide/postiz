@@ -56,7 +56,8 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
   },
   {
     // PLAN 3.3 PR 18: DailyHealth at 07:00 in Berlin. The hub sends its
-    // summary at 07:05 (E38).
+    // summary at 07:05 (E38). Since 0.7.2 the version that saves its state
+    // after the events; the worker switches an existing schedule over.
     scheduleId: 'ysocial-daily-health',
     spec: {
       calendars: [{ hour: 7, minute: 0 }],
@@ -64,7 +65,7 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
     },
     action: {
       type: 'startWorkflow',
-      workflowType: 'ysocialDailyHealthWorkflow',
+      workflowType: 'ysocialDailyHealthWorkflowV101',
       workflowId: 'ysocial-daily-health',
       taskQueue,
       args: [],

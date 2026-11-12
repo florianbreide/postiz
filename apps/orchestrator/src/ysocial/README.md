@@ -130,7 +130,7 @@ Höchstens 7 Tage. Posts, die schon geprüft wurden, prüft er nicht noch einmal
 
 **Kanal-Prüfung**, Schedule `ysocial-channel-check`, jede Stunde um Viertel nach: liest nur die Felder der Kanäle in der Datenbank, ohne Plattformaufruf. Meldet `channel.disconnected`, `channel.reconnected` und `channel.removed`.
 
-**DailyHealth**, Schedule `ysocial-daily-health`, täglich um 07:00 Uhr Europe/Berlin. War der Worker um 07:00 aus, holt der Schedule den Lauf bis 09:00 nach. Je Kanal ohne gelöschtes Datum:
+**DailyHealth**, Schedule `ysocial-daily-health`, täglich um 07:00 Uhr Europe/Berlin. War der Worker um 07:00 aus, holt der Schedule den Lauf bis 09:00 nach. Ab 0.7.2 startet der Schedule `ysocialDailyHealthWorkflowV101`. Der Worker stellt einen vorhandenen Schedule beim Start darauf um. `ysocialDailyHealthWorkflow` und seine Aktivität `ysocialRunDailyHealth` bleiben unverändert für Läufe, die vorher gestartet wurden. Je Kanal ohne gelöschtes Datum:
 
 - Felder wie bei der Kanal-Prüfung, dazu der Ablauf des Zugangs: `channel.token_expiring` ab 7 Tagen vorher.
 - Genau ein lesender Plattformaufruf über die Provider-Methode `analytics` für einen Tag. Kanäle mit gesetztem Feld oder abgelaufenem Zugang und Provider ohne `analytics` bekommen keinen Aufruf. Bei Instagram macht die Provider-Methode intern zwei Anfragen an die Graph API.
@@ -150,11 +150,18 @@ Was die Antwort von `analytics` heißt (`libraries/ysocial/src/health/channel.au
 
 Welche Kanäle gemeldet sind, merkt sich der Worker im Redis von Postiz unter `ysocial:channel-problems`, keine Tabelle. So kann er „wieder verbunden“ melden. „Zugang ungültig“ gilt als gelöst, wenn sich der Kanal danach ändert (neu verbunden) oder der nächste Tageslauf in Ordnung ist. Geht der Schlüssel verloren, meldet der nächste Lauf die aktuellen Probleme noch einmal. `channel.disconnected` hat dann dieselbe Kennung, der Hub zählt es einmal. `channel.auth_invalid` bekommt einen neuen Beginn und damit eine neue Kennung, der Hub zählt es beim offenen Alarm mit.
 
+Wann `DailyHealth` den Zustand speichert (ab 0.7.2, `ysocialDailyHealthWorkflowV101`):
+1. `ysocialPrepareDailyHealth` prüft die Kanäle und Posts und bildet die Ereignisse. Sie speichert nichts. Scheitert sie und Temporal wiederholt sie, findet der zweite Versuch dieselben Probleme noch ungemeldet und meldet sie.
+2. Der Workflow übergibt jedes Ereignis an seine Zustellung.
+3. Erst dann speichert `ysocialSaveChannelProblems` den Zustand. Sie schreibt nur die Kanäle, die dieser Lauf geändert hat, in den Stand, der jetzt in Redis steht. Was die stündliche Kanal-Prüfung in der Zwischenzeit für andere Kanäle geschrieben hat, bleibt. Antwortet Redis nicht, wiederholt Temporal den Schritt, bis zu fünfmal.
+
+Gelingt Schritt 3 gar nicht, meldet der nächste Lauf dieselben Probleme noch einmal: Eine Meldung kann doppelt kommen, aber nicht verloren gehen. `ysocialDailyHealthWorkflow` speichert vor dem Senden. Scheitert seine Aktivität danach und wird wiederholt, gilt das Problem als gemeldet, und die Meldung geht verloren. Die stündliche Kanal-Prüfung liest und schreibt in einer Aktivität ohne weiteren Schritt danach, dort bleibt es beim alten Ablauf.
+
 Im Log steht je Plattformaufruf `provider call analytics provider=<id> channel=<integrationId> result=<ok|auth_invalid|unclear>` und je Tageslauf `daily health: channels=<n> platform calls=<n> skipped=<n>`.
 
 Läufe von Hand (A1, PR 18 QA 3):
 
-    temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialDailyHealthWorkflow --workflow-id ysocial-daily-health-hand
+    temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialDailyHealthWorkflowV101 --workflow-id ysocial-daily-health-hand
     temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialChannelCheckWorkflow --workflow-id ysocial-channel-check-hand
 
 Für einen zweiten Lauf eine neue Workflow-ID nehmen, zum Beispiel mit Uhrzeit.

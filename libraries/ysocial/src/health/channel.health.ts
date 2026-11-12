@@ -43,6 +43,9 @@ export interface ChannelProblemState {
 
 export type ChannelProblems = Record<string, ChannelProblemState>;
 
+// What one run changed: the new state of a channel, null once solved.
+export type ChannelProblemChanges = Record<string, ChannelProblemState | null>;
+
 const FLAG_REASONS: Record<ChannelFlag, string> = {
   refresh_needed: 'Postiz verlangt, dass der Kanal neu verbunden wird.',
   in_between_steps: 'Die Verbindung des Kanals ist nicht abgeschlossen.',
@@ -235,6 +238,50 @@ export const diffChannels = (input: {
   }
 
   return { events, next };
+};
+
+const sameProblem = (
+  a: ChannelProblemState | undefined,
+  b: ChannelProblemState
+) =>
+  !!a &&
+  a.kind === b.kind &&
+  a.updatedAt === b.updatedAt &&
+  a.since === b.since;
+
+export const problemChanges = (
+  previous: ChannelProblems,
+  next: ChannelProblems
+): ChannelProblemChanges => {
+  const changes: ChannelProblemChanges = {};
+  for (const [id, state] of Object.entries(next)) {
+    if (!sameProblem(previous[id], state)) {
+      changes[id] = state;
+    }
+  }
+  for (const id of Object.keys(previous)) {
+    if (!next[id]) {
+      changes[id] = null;
+    }
+  }
+  return changes;
+};
+
+// Applies the changes of one run to the state as it is now. Channels the run
+// did not change keep what another run wrote in between.
+export const applyProblemChanges = (
+  current: ChannelProblems,
+  changes: ChannelProblemChanges
+): ChannelProblems => {
+  const result = { ...current };
+  for (const [id, state] of Object.entries(changes)) {
+    if (state) {
+      result[id] = state;
+    } else {
+      delete result[id];
+    }
+  }
+  return result;
 };
 
 // Calendar day in Berlin, the key of the daily summary.

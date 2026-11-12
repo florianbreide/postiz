@@ -6,11 +6,14 @@ import { YsocialPostRepository } from '../database/ysocial.post.repository';
 import { createHubEvent, HubEvent, sanitizeReason } from '../events/hub.event';
 import { postFailedStateKey } from '../verification/post.verification';
 import {
+  applyProblemChanges,
   berlinDay,
   channelFlag,
+  ChannelProblemChanges,
   ChannelProblems,
   ChannelRow,
   diffChannels,
+  problemChanges,
   tokenExpiringEvent,
 } from './channel.health';
 import {
@@ -49,6 +52,16 @@ export interface DailyHealthSummary {
   failedPosts: string[];
 }
 
+interface DailyChannelCheck {
+  channels: ChannelRow[];
+  previous: ChannelProblems;
+  diff: { events: HubEvent[]; next: ChannelProblems };
+  tokenEvents: HubEvent[];
+  unclear: string[];
+  platformCalls: number;
+  skipped: number;
+}
+
 /**
  * Channel check (hourly, database only) and DailyHealth (07:00, with one
  * reading platform call per channel). PLAN 3.3 PR 18, E23.
@@ -82,9 +95,40 @@ export class YsocialChannelHealthService {
     return { channels: channels.length, events };
   }
 
+  // DailyHealth of ysocialDailyHealthWorkflow: saves the state before the
+  // workflow sends the events. A retry after the save reports nothing.
   async runDailyHealth(
     now: Date = new Date()
   ): Promise<{ events: HubEvent[]; summary: DailyHealthSummary }> {
+    const check = await this.checkChannelsDaily(now);
+    await this.saveProblems(check.diff.next);
+    return this.dailyReport(now, check);
+  }
+
+  // DailyHealth of ysocialDailyHealthWorkflowV101: saves nothing. The
+  // workflow saves the changes with saveProblemChanges once every event is
+  // handed to its delivery, so a retried run still reports them.
+  async prepareDailyHealth(now: Date = new Date()): Promise<{
+    events: HubEvent[];
+    summary: DailyHealthSummary;
+    changes: ChannelProblemChanges;
+  }> {
+    const check = await this.checkChannelsDaily(now);
+    return {
+      ...(await this.dailyReport(now, check)),
+      changes: problemChanges(check.previous, check.diff.next),
+    };
+  }
+
+  // Applies the changes to what is in Redis now: the hourly check may have
+  // written in between. Throws if Redis does not answer, so Temporal retries.
+  async saveProblemChanges(changes: ChannelProblemChanges) {
+    const current = await this.readProblems();
+    await this.saveProblems(applyProblemChanges(current, changes));
+  }
+
+  // Platform call per channel and the comparison with what was reported.
+  private async checkChannelsDaily(now: Date): Promise<DailyChannelCheck> {
     const at = now.getTime();
     const channels = (await this._integrations.getChannels()) as ChannelRow[];
     const authInvalid: Record<string, string> = {};
@@ -129,7 +173,26 @@ export class YsocialChannelHealthService {
       authInvalid,
       authOk,
     });
-    await this.saveProblems(diff.next);
+
+    return {
+      channels,
+      previous,
+      diff,
+      tokenEvents,
+      unclear,
+      platformCalls,
+      skipped,
+    };
+  }
+
+  // Posts in ERROR, the summary and the events of one run.
+  private async dailyReport(
+    now: Date,
+    check: DailyChannelCheck
+  ): Promise<{ events: HubEvent[]; summary: DailyHealthSummary }> {
+    const at = now.getTime();
+    const { channels, diff, tokenEvents, unclear, platformCalls, skipped } =
+      check;
 
     const failedPosts = await this._posts.findFailedPosts(
       new Date(at - FAILED_POSTS_DAYS * DAY_MS),
@@ -257,7 +320,16 @@ export class YsocialChannelHealthService {
 
   private async loadProblems(): Promise<ChannelProblems> {
     try {
-      const raw = await this.store.get(YSOCIAL_CHANNEL_PROBLEMS_KEY);
+      return await this.readProblems();
+    } catch (err) {
+      return {};
+    }
+  }
+
+  // Throws if Redis does not answer. An unreadable value counts as empty.
+  private async readProblems(): Promise<ChannelProblems> {
+    const raw = await this.store.get(YSOCIAL_CHANNEL_PROBLEMS_KEY);
+    try {
       const value = raw ? JSON.parse(raw) : {};
       return value && typeof value === 'object' ? value : {};
     } catch (err) {

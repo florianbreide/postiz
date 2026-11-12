@@ -519,3 +519,170 @@ describe('DailyHealth with the test switch (PR 19)', () => {
     expect(summary.platformCalls).toBe(1);
   });
 });
+
+describe('DailyHealth that saves after the events (V101)', () => {
+  const stored = (saved: Record<string, string>) =>
+    JSON.parse(saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] ?? '{}');
+  const revoked = () => ({
+    facebook: {
+      analytics: jest
+        .fn()
+        .mockRejectedValue(
+          new Error('Error validating access token: Session has expired')
+        ),
+    },
+  });
+  const kinds = (events: { kind: string }[]) => events.map((e) => e.kind);
+
+  it('reports again after a failed attempt, with the same id', async () => {
+    const { service, posts, saved } = setup([row('int-1')], revoked());
+    posts.findFailedPosts.mockRejectedValueOnce(new Error('database down'));
+
+    await expect(service.prepareDailyHealth(NOW)).rejects.toThrow(
+      'database down'
+    );
+    const retry = await service.prepareDailyHealth(NOW);
+
+    expect(kinds(retry.events)).toEqual([
+      'channel.auth_invalid',
+      'health.daily',
+    ]);
+    expect(Object.keys(saved)).toEqual([]);
+    const again = await service.prepareDailyHealth(NOW);
+    expect(again.events.map((e) => e.id)).toEqual(
+      retry.events.map((e) => e.id)
+    );
+  });
+
+  it('is why V101 exists: runDailyHealth has saved before it fails, the retry is silent', async () => {
+    const { service, posts, saved } = setup([row('int-1')], revoked());
+    posts.findFailedPosts.mockRejectedValueOnce(new Error('database down'));
+
+    await expect(service.runDailyHealth(NOW)).rejects.toThrow('database down');
+    expect(stored(saved)).toHaveProperty('int-1');
+    const retry = await service.runDailyHealth(NOW);
+
+    expect(kinds(retry.events)).toEqual(['health.daily']);
+  });
+
+  it('never writes to the store in prepareDailyHealth', async () => {
+    const { service, saved } = setup(
+      [row('int-1'), row('int-2', { disabled: true })],
+      revoked()
+    );
+    const set = jest.fn();
+    (service as any).store.set = set;
+
+    const { changes } = await service.prepareDailyHealth(NOW);
+
+    expect(Object.keys(changes).sort()).toEqual(['int-1', 'int-2']);
+    expect(set).not.toHaveBeenCalled();
+    expect(saved).toEqual({});
+  });
+
+  it('is silent in the next run once the changes are saved', async () => {
+    const { service, saved } = setup([row('int-1')], revoked());
+    const first = await service.prepareDailyHealth(NOW);
+    await service.saveProblemChanges(first.changes);
+    expect(stored(saved)).toHaveProperty('int-1');
+
+    const next = await service.prepareDailyHealth(
+      new Date(NOW.getTime() + DAY)
+    );
+    expect(kinds(next.events)).toEqual(['health.daily']);
+    expect(next.changes).toEqual({});
+  });
+
+  it('keeps what another run wrote for another channel in between', async () => {
+    const { service, saved } = setup([row('int-1')], revoked());
+    const { changes } = await service.prepareDailyHealth(NOW);
+    const other = {
+      kind: 'channel.disconnected',
+      updatedAt: NOW.getTime(),
+      since: String(NOW.getTime()),
+    };
+    saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify({ 'int-9': other });
+
+    await service.saveProblemChanges(changes);
+
+    expect(Object.keys(stored(saved)).sort()).toEqual(['int-1', 'int-9']);
+    expect(stored(saved)['int-9']).toEqual(other);
+  });
+
+  it('removes a solved channel when saving', async () => {
+    const { service, integrations, saved } = setup(
+      [row('int-1', { disabled: true })],
+      {}
+    );
+    await service.checkChannels(NOW);
+    expect(stored(saved)).toHaveProperty('int-1');
+
+    integrations.getChannels.mockResolvedValue([
+      row('int-1', { updatedAt: new Date(NOW.getTime() + 1000) }),
+    ]);
+    const { events, changes } = await service.prepareDailyHealth(
+      new Date(NOW.getTime() + DAY)
+    );
+    expect(kinds(events)).toContain('channel.reconnected');
+    expect(changes).toEqual({ 'int-1': null });
+    expect(stored(saved)).toHaveProperty('int-1');
+
+    await service.saveProblemChanges(changes);
+    expect(stored(saved)).toEqual({});
+  });
+
+  it('throws without a write when Redis does not answer', async () => {
+    const { service } = setup([], {});
+    const set = jest.fn();
+    (service as any).store = {
+      get: jest.fn().mockRejectedValue(new Error('redis down')),
+      set,
+    };
+
+    await expect(
+      service.saveProblemChanges({
+        'int-1': { kind: 'channel.disconnected', updatedAt: 1, since: '1' },
+      })
+    ).rejects.toThrow('redis down');
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('treats an unreadable stored value as empty when saving', async () => {
+    const { service, saved } = setup([], {});
+    saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = '{not json';
+    await service.saveProblemChanges({
+      'int-1': { kind: 'channel.disconnected', updatedAt: 1, since: '1' },
+    });
+    expect(Object.keys(stored(saved))).toEqual(['int-1']);
+  });
+
+  it('gives the same events and summary as runDailyHealth', async () => {
+    const make = () =>
+      setup(
+        [
+          row('int-revoked'),
+          row('int-off', { disabled: true }),
+          row('int-expiring', {
+            tokenExpiration: new Date(NOW.getTime() + 2 * DAY),
+          }),
+        ],
+        revoked(),
+        [
+          {
+            id: 'post-err',
+            organizationId: 'org-1',
+            integrationId: 'int-off',
+            publishDate: new Date('2026-10-25T09:00:00.000Z'),
+            updatedAt: new Date('2026-10-25T09:00:30.000Z'),
+            error: 'failed',
+            integration: { providerIdentifier: 'facebook', customerId: null },
+          },
+        ]
+      );
+    const old = await make().service.runDailyHealth(NOW);
+    const prepared = await make().service.prepareDailyHealth(NOW);
+
+    expect(prepared.events).toEqual(old.events);
+    expect(prepared.summary).toEqual(old.summary);
+  });
+});

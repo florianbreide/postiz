@@ -263,6 +263,38 @@ describe('channel checks', () => {
   });
 });
 
+describe('DailyHealth that saves after the events', () => {
+  it('hands the preparation and the save to the service', async () => {
+    const prepared = {
+      events: [] as any[],
+      summary: { day: '2026-10-27' },
+      changes: { 'int-1': null as null },
+    };
+    const channelHealth = {
+      prepareDailyHealth: jest.fn().mockResolvedValue(prepared),
+      saveProblemChanges: jest.fn().mockResolvedValue(undefined),
+    };
+    const activities = new YsocialActivities(
+      {} as any,
+      {} as any,
+      channelHealth as any,
+      {} as any
+    );
+    expect(await activities.ysocialPrepareDailyHealth({})).toBe(prepared);
+    expect(channelHealth.prepareDailyHealth).toHaveBeenCalledWith();
+
+    const changes = {
+      'int-1': {
+        kind: 'channel.disconnected' as const,
+        updatedAt: 1,
+        since: '1',
+      },
+    };
+    await activities.ysocialSaveChannelProblems({ changes });
+    expect(channelHealth.saveProblemChanges).toHaveBeenCalledWith(changes);
+  });
+});
+
 describe('ysocialMigrateTokens', () => {
   const build = (migrate: jest.Mock) =>
     new YsocialActivities({} as any, {} as any, {} as any, { migrate } as any);
