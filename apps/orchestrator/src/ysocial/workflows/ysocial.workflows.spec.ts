@@ -10,6 +10,8 @@ const mockActivities = {
   ysocialStartPostVerifications: jest.fn(),
   ysocialCheckChannels: jest.fn(),
   ysocialRunDailyHealth: jest.fn(),
+  ysocialPrepareDailyHealth: jest.fn(),
+  ysocialSaveChannelProblems: jest.fn(),
   ysocialMigrateTokens: jest.fn(),
 };
 const mockInfo = {
@@ -34,7 +36,9 @@ import { emitHubEvent } from './ysocial.emit';
 import { ysocialPostVerificationWorkflow } from './ysocial.post.verification.workflow';
 import { ysocialChannelCheckWorkflow } from './ysocial.channel.check.workflow';
 import { ysocialDailyHealthWorkflow } from './ysocial.daily.health.workflow';
+import { ysocialDailyHealthWorkflowV101 } from './ysocial.daily.health.workflow.v1.0.1';
 import { ysocialTokenMigrationWorkflow } from './ysocial.token.migration.workflow';
+import type { ChannelProblemChanges } from '../../../../../libraries/ysocial/src/health/channel.health';
 import { createHubEvent } from '../../../../../libraries/ysocial/src/events/hub.event';
 
 const POSTIZ_WORKFLOWS = join(__dirname, '..', '..', 'workflows');
@@ -77,6 +81,7 @@ describe('ysocial workflows', () => {
         'ysocialVerifyPostWorkflowV101',
         'ysocialChannelCheckWorkflow',
         'ysocialDailyHealthWorkflow',
+        'ysocialDailyHealthWorkflowV101',
         'ysocialTokenMigrationWorkflow',
       ])
     );
@@ -224,6 +229,92 @@ describe('channel workflows', () => {
     expect(
       mockStartChild.mock.calls.map(([, options]) => options.args[0].kind)
     ).toEqual(['channel.auth_invalid', 'health.daily']);
+  });
+
+  describe('ysocialDailyHealthWorkflowV101', () => {
+    const summary = { day: '2026-10-27', channels: 1 };
+    const changes: ChannelProblemChanges = {
+      'int-1': {
+        before: null,
+        after: { kind: 'channel.auth_invalid', updatedAt: 1, since: '2' },
+      },
+    };
+    const prepared = () => ({
+      events: [
+        event('channel.auth_invalid', 'int-1'),
+        event('health.daily', 'postiz'),
+      ],
+      summary,
+      changes,
+    });
+
+    it('prepares, hands out every event, then saves exactly the changes', async () => {
+      const calls: string[] = [];
+      mockActivities.ysocialPrepareDailyHealth.mockImplementation(async () => {
+        calls.push('prepare');
+        return prepared();
+      });
+      mockStartChild.mockImplementation(async (_type, options) => {
+        calls.push(`start:${options.args[0].kind}`);
+        return {};
+      });
+      mockActivities.ysocialSaveChannelProblems.mockImplementation(async () => {
+        calls.push('save');
+      });
+
+      expect(await ysocialDailyHealthWorkflowV101()).toEqual(summary);
+
+      expect(calls).toEqual([
+        'prepare',
+        'start:channel.auth_invalid',
+        'start:health.daily',
+        'save',
+      ]);
+      expect(mockActivities.ysocialSaveChannelProblems).toHaveBeenCalledWith({
+        changes,
+      });
+    });
+
+    it('does not save when handing out an event fails', async () => {
+      mockActivities.ysocialPrepareDailyHealth.mockResolvedValue(prepared());
+      mockActivities.ysocialSaveChannelProblems.mockReset();
+      mockStartChild.mockRejectedValue(new Error('temporal down'));
+
+      await expect(ysocialDailyHealthWorkflowV101()).rejects.toThrow(
+        'temporal down'
+      );
+      expect(mockActivities.ysocialSaveChannelProblems).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the save fails, after every event was handed out', async () => {
+      mockActivities.ysocialPrepareDailyHealth.mockResolvedValue(prepared());
+      mockStartChild.mockReset();
+      mockStartChild.mockResolvedValue({});
+      mockActivities.ysocialSaveChannelProblems.mockReset();
+      mockActivities.ysocialSaveChannelProblems.mockRejectedValue(
+        new Error('redis down')
+      );
+
+      await expect(ysocialDailyHealthWorkflowV101()).rejects.toThrow(
+        'redis down'
+      );
+      expect(mockStartChild).toHaveBeenCalledTimes(2);
+    });
+
+    it('starts nothing and saves nothing when the preparation fails', async () => {
+      mockActivities.ysocialPrepareDailyHealth.mockReset();
+      mockActivities.ysocialPrepareDailyHealth.mockRejectedValue(
+        new Error('database down')
+      );
+      mockStartChild.mockReset();
+      mockActivities.ysocialSaveChannelProblems.mockReset();
+
+      await expect(ysocialDailyHealthWorkflowV101()).rejects.toThrow(
+        'database down'
+      );
+      expect(mockStartChild).not.toHaveBeenCalled();
+      expect(mockActivities.ysocialSaveChannelProblems).not.toHaveBeenCalled();
+    });
   });
 });
 

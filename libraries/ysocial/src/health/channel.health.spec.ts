@@ -1,8 +1,11 @@
 import {
+  applyProblemChanges,
   berlinDay,
   channelFlag,
+  ChannelProblemChanges,
   ChannelRow,
   diffChannels,
+  problemChanges,
   tokenExpiringEvent,
   tokenExpiry,
 } from './channel.health';
@@ -328,5 +331,229 @@ describe('berlinDay', () => {
     expect(berlinDay(Date.parse('2026-10-26T05:00:00.000Z'))).toBe(
       '2026-10-26'
     );
+  });
+});
+
+describe('problemChanges', () => {
+  const problem = (patch = {}) => ({
+    kind: 'channel.auth_invalid' as const,
+    updatedAt: NOW - DAY,
+    since: String(NOW),
+    ...patch,
+  });
+
+  it('is empty for an unchanged state', () => {
+    const state = { 'int-1': problem(), 'int-2': problem() };
+    expect(problemChanges(state, { ...state })).toEqual({});
+    expect(problemChanges({}, {})).toEqual({});
+  });
+
+  it('has no state before for a new channel', () => {
+    expect(problemChanges({}, { 'int-1': problem() })).toEqual({
+      'int-1': { before: null, after: problem() },
+    });
+  });
+
+  it('has both states when kind, since or updatedAt changed', () => {
+    const previous = { 'int-1': problem(), 'int-2': problem() };
+    expect(
+      problemChanges(previous, {
+        'int-1': problem({ since: String(NOW + DAY) }),
+        'int-2': problem(),
+      })
+    ).toEqual({
+      'int-1': {
+        before: problem(),
+        after: problem({ since: String(NOW + DAY) }),
+      },
+    });
+    expect(
+      problemChanges(previous, {
+        'int-1': problem({ updatedAt: NOW }),
+        'int-2': problem({ kind: 'channel.disconnected' }),
+      })
+    ).toEqual({
+      'int-1': { before: problem(), after: problem({ updatedAt: NOW }) },
+      'int-2': {
+        before: problem(),
+        after: problem({ kind: 'channel.disconnected' }),
+      },
+    });
+  });
+
+  it('has no state after for a solved channel', () => {
+    expect(
+      problemChanges(
+        { 'int-1': problem(), 'int-2': problem() },
+        { 'int-2': problem() }
+      )
+    ).toEqual({ 'int-1': { before: problem(), after: null } });
+  });
+});
+
+describe('applyProblemChanges', () => {
+  const problem = (n: number) => ({
+    kind: 'channel.auth_invalid' as const,
+    updatedAt: NOW - DAY,
+    since: String(n),
+  });
+
+  it('sets and deletes only the named channels', () => {
+    const current = {
+      'int-1': problem(1),
+      'int-2': problem(2),
+      'int-3': problem(3),
+    };
+    expect(
+      applyProblemChanges(current, {
+        'int-1': { before: problem(1), after: null },
+        'int-4': { before: null, after: problem(4) },
+      })
+    ).toEqual({
+      'int-2': problem(2),
+      'int-3': problem(3),
+      'int-4': problem(4),
+    });
+    expect(Object.keys(current)).toEqual(['int-1', 'int-2', 'int-3']);
+  });
+
+  it('keeps a channel that is no longer in the state the run started from', () => {
+    const changed = { ...problem(1), kind: 'channel.disconnected' as const };
+    const changes: ChannelProblemChanges = {
+      'int-1': { before: problem(1), after: null },
+      'int-2': { before: null, after: problem(2) },
+      'int-3': { before: problem(3), after: problem(4) },
+    };
+    expect(
+      applyProblemChanges({ 'int-1': changed, 'int-2': problem(9) }, changes)
+    ).toEqual({ 'int-1': changed, 'int-2': problem(9) });
+  });
+
+  it('gives the same state when applied twice', () => {
+    const changes: ChannelProblemChanges = {
+      'int-1': { before: problem(1), after: null },
+      'int-2': { before: null, after: problem(9) },
+      'int-3': { before: problem(3), after: problem(4) },
+    };
+    const current = { 'int-1': problem(1), 'int-3': problem(3) };
+    const once = applyProblemChanges(current, changes);
+    expect(once).toEqual({ 'int-2': problem(9), 'int-3': problem(4) });
+    expect(applyProblemChanges(once, changes)).toEqual(once);
+  });
+
+  it('ignores a deletion of a channel that is not there', () => {
+    expect(
+      applyProblemChanges({}, { 'int-1': { before: problem(1), after: null } })
+    ).toEqual({});
+  });
+});
+
+describe('a check that runs between preparing and saving', () => {
+  const DAILY = NOW;
+  const HOURLY = NOW + 1000;
+  const NEXT_HOURLY = NOW + 3600_000;
+  const kinds = (events: { kind: string }[]) => events.map((e) => e.kind);
+
+  it('does not undo a disconnect the hourly check found (L1)', () => {
+    const x = channel({ id: 'X' });
+    const flagged = channel({ id: 'X', refreshNeeded: true });
+    const reported = diffChannels({
+      previous: {},
+      channels: [x],
+      now: NOW - DAY,
+      authInvalid: { X: 'expired' },
+    }).next;
+    expect(reported.X.kind).toBe('channel.auth_invalid');
+
+    const daily = diffChannels({
+      previous: reported,
+      channels: [x],
+      now: DAILY,
+      authOk: ['X'],
+    });
+    const changes = problemChanges(reported, daily.next);
+    expect(kinds(daily.events)).toEqual(['channel.reconnected']);
+    expect(changes).toEqual({ X: { before: reported.X, after: null } });
+
+    const hourly = diffChannels({
+      previous: reported,
+      channels: [flagged],
+      now: HOURLY,
+    });
+    expect(kinds(hourly.events)).toEqual(['channel.disconnected']);
+
+    const saved = applyProblemChanges(hourly.next, changes);
+    expect(saved.X.kind).toBe('channel.disconnected');
+
+    const later = diffChannels({
+      previous: saved,
+      channels: [x],
+      now: NEXT_HOURLY,
+    });
+    expect(kinds(later.events)).toEqual(['channel.reconnected']);
+  });
+
+  it('does not bring back a problem the hourly check solved (L5)', () => {
+    const x = channel({ id: 'X' });
+    const reported = diffChannels({
+      previous: {},
+      channels: [channel({ id: 'X', disabled: true })],
+      now: NOW - DAY,
+    }).next;
+    expect(reported.X.kind).toBe('channel.disconnected');
+
+    const daily = diffChannels({
+      previous: reported,
+      channels: [x],
+      now: DAILY,
+      authInvalid: { X: 'expired' },
+    });
+    const changes = problemChanges(reported, daily.next);
+    expect(kinds(daily.events)).toEqual(['channel.auth_invalid']);
+    expect(changes.X).toEqual({ before: reported.X, after: daily.next.X });
+
+    const hourly = diffChannels({
+      previous: reported,
+      channels: [x],
+      now: HOURLY,
+    });
+    expect(kinds(hourly.events)).toEqual(['channel.reconnected']);
+    expect(hourly.next).toEqual({});
+
+    const saved = applyProblemChanges(hourly.next, changes);
+    expect(saved).toEqual({});
+
+    const nextDaily = diffChannels({
+      previous: saved,
+      channels: [x],
+      now: DAILY + DAY,
+      authInvalid: { X: 'expired' },
+    });
+    expect(kinds(nextDaily.events)).toEqual(['channel.auth_invalid']);
+    expect(nextDaily.events[0].id).not.toBe(daily.events[0].id);
+  });
+
+  it('does not let a second DailyHealth run overwrite the first', () => {
+    const x = channel({ id: 'X' });
+    const run = (now: number) => {
+      const { events, next } = diffChannels({
+        previous: {},
+        channels: [x],
+        now,
+        authInvalid: { X: 'expired' },
+      });
+      return { events, changes: problemChanges({}, next) };
+    };
+    const first = run(DAILY);
+    const second = run(DAILY + 60_000);
+    expect(first.changes.X.after!.since).not.toBe(
+      second.changes.X.after!.since
+    );
+
+    const saved = applyProblemChanges(
+      applyProblemChanges({}, first.changes),
+      second.changes
+    );
+    expect(saved.X).toEqual(first.changes.X.after);
   });
 });

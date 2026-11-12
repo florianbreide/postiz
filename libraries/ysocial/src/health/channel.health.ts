@@ -43,6 +43,15 @@ export interface ChannelProblemState {
 
 export type ChannelProblems = Record<string, ChannelProblemState>;
 
+// What one run changed for a channel: the state it started from and the one
+// it leaves, null for none.
+export interface ChannelProblemChange {
+  before: ChannelProblemState | null;
+  after: ChannelProblemState | null;
+}
+
+export type ChannelProblemChanges = Record<string, ChannelProblemChange>;
+
 const FLAG_REASONS: Record<ChannelFlag, string> = {
   refresh_needed: 'Postiz verlangt, dass der Kanal neu verbunden wird.',
   in_between_steps: 'Die Verbindung des Kanals ist nicht abgeschlossen.',
@@ -235,6 +244,49 @@ export const diffChannels = (input: {
   }
 
   return { events, next };
+};
+
+const sameProblem = (
+  a: ChannelProblemState | null | undefined,
+  b: ChannelProblemState | null | undefined
+) =>
+  !a || !b
+    ? !a && !b
+    : a.kind === b.kind && a.updatedAt === b.updatedAt && a.since === b.since;
+
+export const problemChanges = (
+  previous: ChannelProblems,
+  next: ChannelProblems
+): ChannelProblemChanges => {
+  const changes: ChannelProblemChanges = {};
+  for (const id of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (!sameProblem(previous[id], next[id])) {
+      changes[id] = { before: previous[id] || null, after: next[id] || null };
+    }
+  }
+  return changes;
+};
+
+// Applies the changes of one run to the state as it is now. A channel is
+// written only if it still has the state the run started from: if another
+// check changed it in between, its newer state stays, and the next run
+// compares again. Applying the same changes twice gives the same result.
+export const applyProblemChanges = (
+  current: ChannelProblems,
+  changes: ChannelProblemChanges
+): ChannelProblems => {
+  const result = { ...current };
+  for (const [id, { before, after }] of Object.entries(changes)) {
+    if (!sameProblem(current[id], before)) {
+      continue;
+    }
+    if (after) {
+      result[id] = after;
+    } else {
+      delete result[id];
+    }
+  }
+  return result;
 };
 
 // Calendar day in Berlin, the key of the daily summary.
