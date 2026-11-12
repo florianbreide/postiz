@@ -185,7 +185,8 @@ export class YsocialActivities {
     return this._channelHealth.prepareDailyHealth();
   }
 
-  // Which channels were reported, in Redis. Only the given channels change.
+  // Which channels were reported, in Redis. Only the given channels change,
+  // and only if nothing else changed them since the check.
   async ysocialSaveChannelProblems(input: {
     changes: ChannelProblemChanges;
   }): Promise<void> {

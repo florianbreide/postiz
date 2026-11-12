@@ -123,6 +123,9 @@ export class YsocialChannelHealthService {
   // Applies the changes to what is in Redis now: the hourly check may have
   // written in between. Throws if Redis does not answer, so Temporal retries.
   async saveProblemChanges(changes: ChannelProblemChanges) {
+    if (!Object.keys(changes).length) {
+      return;
+    }
     const current = await this.readProblems();
     await this.saveProblems(applyProblemChanges(current, changes));
   }

@@ -20,6 +20,7 @@ import {
 } from './ysocial.activities';
 import { createHubEvent } from '../../../../libraries/ysocial/src/events/hub.event';
 import { YsocialTokenKeyError } from '../../../../libraries/ysocial/src/tokens/token.crypto';
+import type { ChannelProblemChanges } from '../../../../libraries/ysocial/src/health/channel.health';
 
 const POSTIZ_ACTIVITIES = join(__dirname, '..', 'activities');
 
@@ -268,7 +269,9 @@ describe('DailyHealth that saves after the events', () => {
     const prepared = {
       events: [] as any[],
       summary: { day: '2026-10-27' },
-      changes: { 'int-1': null as null },
+      changes: {
+        'int-1': { before: null, after: null },
+      } as ChannelProblemChanges,
     };
     const channelHealth = {
       prepareDailyHealth: jest.fn().mockResolvedValue(prepared),
@@ -283,11 +286,14 @@ describe('DailyHealth that saves after the events', () => {
     expect(await activities.ysocialPrepareDailyHealth({})).toBe(prepared);
     expect(channelHealth.prepareDailyHealth).toHaveBeenCalledWith();
 
-    const changes = {
+    const changes: ChannelProblemChanges = {
       'int-1': {
-        kind: 'channel.disconnected' as const,
-        updatedAt: 1,
-        since: '1',
+        before: null,
+        after: {
+          kind: 'channel.disconnected',
+          updatedAt: 1,
+          since: '1',
+        },
       },
     };
     await activities.ysocialSaveChannelProblems({ changes });

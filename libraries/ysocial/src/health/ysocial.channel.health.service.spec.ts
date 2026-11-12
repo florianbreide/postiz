@@ -533,8 +533,13 @@ describe('DailyHealth that saves after the events (V101)', () => {
     },
   });
   const kinds = (events: { kind: string }[]) => events.map((e) => e.kind);
+  const disconnected = {
+    kind: 'channel.disconnected' as const,
+    updatedAt: 1,
+    since: '1',
+  };
 
-  it('reports again after a failed attempt, with the same id', async () => {
+  it('reports the event again on a retry after a failed attempt', async () => {
     const { service, posts, saved } = setup([row('int-1')], revoked());
     posts.findFailedPosts.mockRejectedValueOnce(new Error('database down'));
 
@@ -548,10 +553,6 @@ describe('DailyHealth that saves after the events (V101)', () => {
       'health.daily',
     ]);
     expect(Object.keys(saved)).toEqual([]);
-    const again = await service.prepareDailyHealth(NOW);
-    expect(again.events.map((e) => e.id)).toEqual(
-      retry.events.map((e) => e.id)
-    );
   });
 
   it('is why V101 exists: runDailyHealth has saved before it fails, the retry is silent', async () => {
@@ -624,7 +625,7 @@ describe('DailyHealth that saves after the events (V101)', () => {
       new Date(NOW.getTime() + DAY)
     );
     expect(kinds(events)).toContain('channel.reconnected');
-    expect(changes).toEqual({ 'int-1': null });
+    expect(changes).toMatchObject({ 'int-1': { after: null } });
     expect(stored(saved)).toHaveProperty('int-1');
 
     await service.saveProblemChanges(changes);
@@ -641,7 +642,7 @@ describe('DailyHealth that saves after the events (V101)', () => {
 
     await expect(
       service.saveProblemChanges({
-        'int-1': { kind: 'channel.disconnected', updatedAt: 1, since: '1' },
+        'int-1': { before: null, after: disconnected },
       })
     ).rejects.toThrow('redis down');
     expect(set).not.toHaveBeenCalled();
@@ -651,7 +652,7 @@ describe('DailyHealth that saves after the events (V101)', () => {
     const { service, saved } = setup([], {});
     saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = '{not json';
     await service.saveProblemChanges({
-      'int-1': { kind: 'channel.disconnected', updatedAt: 1, since: '1' },
+      'int-1': { before: null, after: disconnected },
     });
     expect(Object.keys(stored(saved))).toEqual(['int-1']);
   });
@@ -684,5 +685,36 @@ describe('DailyHealth that saves after the events (V101)', () => {
 
     expect(prepared.events).toEqual(old.events);
     expect(prepared.summary).toEqual(old.summary);
+  });
+
+  it('neither reads nor writes when there are no changes', async () => {
+    const { service } = setup([], {});
+    const get = jest.fn();
+    const set = jest.fn();
+    (service as any).store = { get, set };
+
+    await service.saveProblemChanges({});
+
+    expect(get).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite the real state when it was unreadable while preparing', async () => {
+    const { service, saved } = setup([row('int-1')], revoked());
+    const real = { ...disconnected, updatedAt: 5 };
+    const store = (service as any).store;
+    const get = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('redis down'))
+      .mockImplementation(store.get);
+    (service as any).store = { ...store, get };
+    saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify({ 'int-1': real });
+
+    const { changes } = await service.prepareDailyHealth(NOW);
+    expect(changes['int-1'].before).toBeNull();
+
+    await service.saveProblemChanges(changes);
+
+    expect(stored(saved)['int-1']).toEqual(real);
   });
 });

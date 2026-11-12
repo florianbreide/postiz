@@ -153,9 +153,11 @@ Welche Kanäle gemeldet sind, merkt sich der Worker im Redis von Postiz unter `y
 Wann `DailyHealth` den Zustand speichert (ab 0.7.2, `ysocialDailyHealthWorkflowV101`):
 1. `ysocialPrepareDailyHealth` prüft die Kanäle und Posts und bildet die Ereignisse. Sie speichert nichts. Scheitert sie und Temporal wiederholt sie, findet der zweite Versuch dieselben Probleme noch ungemeldet und meldet sie.
 2. Der Workflow übergibt jedes Ereignis an seine Zustellung.
-3. Erst dann speichert `ysocialSaveChannelProblems` den Zustand. Sie schreibt nur die Kanäle, die dieser Lauf geändert hat, in den Stand, der jetzt in Redis steht. Was die stündliche Kanal-Prüfung in der Zwischenzeit für andere Kanäle geschrieben hat, bleibt. Antwortet Redis nicht, wiederholt Temporal den Schritt, bis zu fünfmal.
+3. Erst dann speichert `ysocialSaveChannelProblems` den Zustand. Sie liest Redis neu und schreibt nur die Kanäle, die dieser Lauf geändert hat, und nur, wenn dort noch der Stand steht, von dem der Lauf ausging. Hat die stündliche Kanal-Prüfung einen Kanal in der Zwischenzeit geändert, bleibt ihr Stand, sie hatte die neueren Daten. Der nächste Lauf vergleicht dann wieder. Ohne Änderung schreibt sie nichts. Antwortet Redis nicht, wiederholt Temporal den Schritt bis zu 10 Minuten lang.
 
-Gelingt Schritt 3 gar nicht, meldet der nächste Lauf dieselben Probleme noch einmal: Eine Meldung kann doppelt kommen, aber nicht verloren gehen. `ysocialDailyHealthWorkflow` speichert vor dem Senden. Scheitert seine Aktivität danach und wird wiederholt, gilt das Problem als gemeldet, und die Meldung geht verloren. Die stündliche Kanal-Prüfung liest und schreibt in einer Aktivität ohne weiteren Schritt danach, dort bleibt es beim alten Ablauf.
+Scheitert Schritt 1 oder 2, ist nichts gespeichert, und ein neuer Versuch oder der nächste Lauf meldet die Probleme noch einmal. Eine Meldung kann doppelt kommen, ein Problem geht nicht verloren. Bleibt Redis länger als 10 Minuten weg und Schritt 3 scheitert ganz, fehlen dem Zustand die neuen Probleme dieses Laufs. Der nächste Lauf meldet sie noch einmal, solange sie bestehen. Ist eines bis dahin gelöst, kommt kein `channel.reconnected`, und der Alarm im Hub bleibt offen, bis jemand ihn schließt.
+
+`ysocialDailyHealthWorkflow` speichert vor dem Senden. Scheitert seine Aktivität danach und wird wiederholt, gilt das Problem als gemeldet, und die Meldung geht verloren. Die stündliche Kanal-Prüfung liest und schreibt in einer Aktivität ohne weiteren Schritt danach, dort bleibt es beim alten Ablauf.
 
 Im Log steht je Plattformaufruf `provider call analytics provider=<id> channel=<integrationId> result=<ok|auth_invalid|unclear>` und je Tageslauf `daily health: channels=<n> platform calls=<n> skipped=<n>`.
 

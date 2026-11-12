@@ -43,8 +43,14 @@ export interface ChannelProblemState {
 
 export type ChannelProblems = Record<string, ChannelProblemState>;
 
-// What one run changed: the new state of a channel, null once solved.
-export type ChannelProblemChanges = Record<string, ChannelProblemState | null>;
+// What one run changed for a channel: the state it started from and the one
+// it leaves, null for none.
+export interface ChannelProblemChange {
+  before: ChannelProblemState | null;
+  after: ChannelProblemState | null;
+}
+
+export type ChannelProblemChanges = Record<string, ChannelProblemChange>;
 
 const FLAG_REASONS: Record<ChannelFlag, string> = {
   refresh_needed: 'Postiz verlangt, dass der Kanal neu verbunden wird.',
@@ -241,42 +247,41 @@ export const diffChannels = (input: {
 };
 
 const sameProblem = (
-  a: ChannelProblemState | undefined,
-  b: ChannelProblemState
+  a: ChannelProblemState | null | undefined,
+  b: ChannelProblemState | null | undefined
 ) =>
-  !!a &&
-  a.kind === b.kind &&
-  a.updatedAt === b.updatedAt &&
-  a.since === b.since;
+  !a || !b
+    ? !a && !b
+    : a.kind === b.kind && a.updatedAt === b.updatedAt && a.since === b.since;
 
 export const problemChanges = (
   previous: ChannelProblems,
   next: ChannelProblems
 ): ChannelProblemChanges => {
   const changes: ChannelProblemChanges = {};
-  for (const [id, state] of Object.entries(next)) {
-    if (!sameProblem(previous[id], state)) {
-      changes[id] = state;
-    }
-  }
-  for (const id of Object.keys(previous)) {
-    if (!next[id]) {
-      changes[id] = null;
+  for (const id of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (!sameProblem(previous[id], next[id])) {
+      changes[id] = { before: previous[id] || null, after: next[id] || null };
     }
   }
   return changes;
 };
 
-// Applies the changes of one run to the state as it is now. Channels the run
-// did not change keep what another run wrote in between.
+// Applies the changes of one run to the state as it is now. A channel is
+// written only if it still has the state the run started from: if another
+// check changed it in between, its newer state stays, and the next run
+// compares again. Applying the same changes twice gives the same result.
 export const applyProblemChanges = (
   current: ChannelProblems,
   changes: ChannelProblemChanges
 ): ChannelProblems => {
   const result = { ...current };
-  for (const [id, state] of Object.entries(changes)) {
-    if (state) {
-      result[id] = state;
+  for (const [id, { before, after }] of Object.entries(changes)) {
+    if (!sameProblem(current[id], before)) {
+      continue;
+    }
+    if (after) {
+      result[id] = after;
     } else {
       delete result[id];
     }
