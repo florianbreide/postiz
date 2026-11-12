@@ -555,4 +555,154 @@ describe('deadlines after "Erneut versuchen"', () => {
     expect(second.events[0].id).toBe(`post.failed:post-1:${T0}-${U2}`);
     expect(second.events[0].id).not.toBe(first.events[0].id);
   });
+
+  describe('post stays queued after the retry, then goes out', () => {
+    const queue = (at: number) => post({ state: 'QUEUE', updatedAt: iso(at) });
+    // Failed at U1, retried at R, not published 3 minutes later.
+    const notPublished = () => {
+      const first = retry(failed(U1), T0 + MIN);
+      const queued = retry(queue(R), R + MIN, first.memory);
+      expect(queued.memory.requeuedAt).toBe(R);
+      return retry(queue(R), R + 3 * MIN, queued.memory);
+    };
+    const P5 = R + 5 * MIN;
+
+    it('counts 4 minutes from the publish, with the text for it', () => {
+      const due = notPublished();
+      expect(kinds(due)).toEqual(['post.not_published']);
+      expect(due.events[0].reason).toBe(
+        'Der Post steht 3 Minuten nach „Erneut versuchen“ noch auf „geplant“.'
+      );
+
+      const early = retry(published(P5), P5 + MIN, due.memory, notFound);
+      expect(early.events).toEqual([]);
+      expect(early.done).toBe(false);
+      expect(early.nextCheckAt).toBe(P5 + 4 * MIN);
+
+      const late = retry(published(P5), P5 + 4 * MIN, early.memory, notFound);
+      expect(kinds(late)).toEqual(['post.not_found']);
+      expect(late.events[0].reason).toBe(
+        'Postiz meldet „veröffentlicht“, die Plattform findet den Post 4 Minuten nach dem Veröffentlichen nicht.'
+      );
+    });
+
+    it('verifies when the platform finds the post before the deadline', () => {
+      const due = notPublished();
+      const s = retry(published(P5), P5 + 3 * MIN, due.memory, {
+        result: 'found',
+      });
+      expect(kinds(s)).toEqual(['post.verified']);
+    });
+
+    it('does not report post.not_published a second time', () => {
+      const due = notPublished();
+      let memory = due.memory;
+      let now = R + 3 * MIN;
+      for (let i = 0; i < 8; i++) {
+        const next = retry(queue(R), now + MIN, memory);
+        expect(next.events).toEqual([]);
+        expect(next.done).toBe(false);
+        memory = next.memory;
+        now = next.nextCheckAt!;
+      }
+    });
+
+    it('does not move the deadline when the post is written again', () => {
+      const first = retry(failed(U1), T0 + MIN);
+      const queued = retry(queue(R), R + MIN, first.memory);
+      const rewritten = retry(queue(R + 2 * MIN), R + 2.5 * MIN, queued.memory);
+      expect(rewritten.memory.requeuedAt).toBe(R);
+      expect(rewritten.nextCheckAt).toBe(R + 3 * MIN);
+      const due = retry(queue(R + 2 * MIN), R + 3 * MIN, rewritten.memory);
+      expect(kinds(due)).toEqual(['post.not_published']);
+
+      const seen = retry(published(P5), P5 + MIN, due.memory, notFound);
+      const rewrittenOut = retry(
+        published(P5 + 2 * MIN),
+        P5 + 3 * MIN,
+        seen.memory,
+        notFound
+      );
+      expect(rewrittenOut.memory.publishedAt).toBe(P5);
+      expect(rewrittenOut.nextCheckAt).toBe(P5 + 4 * MIN);
+      const late = retry(
+        published(P5 + 2 * MIN),
+        P5 + 4 * MIN,
+        rewrittenOut.memory,
+        notFound
+      );
+      expect(kinds(late)).toEqual(['post.not_found']);
+    });
+  });
+
+  it('gives a second retry after a new failure its own times', () => {
+    const U2 = R + 10 * MIN;
+    const R2 = U2 + 60 * MIN;
+    const first = retry(failed(U1), T0 + MIN);
+    const queued = retry(
+      post({ state: 'QUEUE', updatedAt: iso(R) }),
+      R + MIN,
+      first.memory
+    );
+    const failedAgain = retry(failed(U2), U2 + MIN, queued.memory);
+    expect(kinds(failedAgain)).toEqual(['post.failed']);
+    expect(failedAgain.memory.requeuedAt).toBeUndefined();
+    expect(failedAgain.memory.publishedAt).toBeUndefined();
+    expect(failedAgain.memory.retriedAt).toBe(R);
+
+    const requeued = retry(
+      post({ state: 'QUEUE', updatedAt: iso(R2) }),
+      R2 + MIN,
+      failedAgain.memory
+    );
+    expect(requeued.memory.requeuedAt).toBe(R2);
+    expect(requeued.nextCheckAt).toBe(R2 + 2 * MIN);
+    const due = retry(
+      post({ state: 'QUEUE', updatedAt: iso(R2) }),
+      R2 + 3 * MIN,
+      requeued.memory
+    );
+    expect(kinds(due)).toEqual(['post.not_published']);
+    expect(due.memory.retriedAt).toBe(R2);
+  });
+
+  it('counts a late post without a retry from its publish', () => {
+    const queued = post({ state: 'QUEUE' });
+    const due = retry(queued, T0 + 3 * MIN);
+    expect(kinds(due)).toEqual(['post.not_published']);
+    expect(due.events[0].reason).toBe(
+      'Der Post steht 3 Minuten nach dem Termin noch auf „geplant“.'
+    );
+    expect(due.memory.requeuedAt).toBeUndefined();
+
+    const P10 = T0 + 10 * MIN;
+    const early = retry(published(P10), P10 + MIN, due.memory, notFound);
+    expect(early.events).toEqual([]);
+    expect(early.nextCheckAt).toBe(P10 + 4 * MIN);
+    const late = retry(published(P10), P10 + 4 * MIN, early.memory, notFound);
+    expect(kinds(late)).toEqual(['post.not_found']);
+    expect(late.events[0].reason).toContain('nach dem Veröffentlichen');
+  });
+
+  it('uses the old texts and sets no times without the option', () => {
+    const first = step(failed(U1), T0 + MIN, undefined, undefined, true);
+    const queued = step(
+      post({ state: 'QUEUE', updatedAt: iso(R) }),
+      R + 3 * MIN,
+      first.memory,
+      undefined,
+      true
+    );
+    expect(queued.events).toEqual([]);
+    const out = step(published(P), P + MIN, queued.memory, notFound, true);
+    expect(kinds(out)).toEqual(['post.not_found']);
+    expect(out.events[0].reason).toBe(
+      'Postiz meldet „veröffentlicht“, die Plattform findet den Post 4 Minuten nach dem Termin nicht.'
+    );
+    for (const s of [first, queued, out]) {
+      expect(s.memory.requeuedAt).toBeUndefined();
+      expect(s.memory.publishedAt).toBeUndefined();
+      expect(s.memory.retriedAt).toBeUndefined();
+    }
+  });
 });

@@ -95,11 +95,11 @@ describe('ysocialVerifyPostWorkflowV102 in time lapse', () => {
   const U1 = T0 + 20_000;
   const R = T0 + 120 * MIN;
 
-  it('does not report post.not_found for a retried post the platform finds after 2 minutes', async () => {
+  it('does not report post.not_found for a retried post the platform finds after 3 minutes', async () => {
     // ERROR, "Erneut versuchen" 2 hours later, published a minute after that.
     const P = R + MIN;
     mockActivities.ysocialCheckPostOnPlatform.mockImplementation(async () => ({
-      result: Date.now() < P + 2 * MIN ? 'not_found' : 'found',
+      result: Date.now() < P + 3 * MIN ? 'not_found' : 'found',
     }));
     const result = await run((now) =>
       now >= P
@@ -113,8 +113,8 @@ describe('ysocialVerifyPostWorkflowV102 in time lapse', () => {
       'post.failed',
       'post.verified',
     ]);
-    expect(mockEvents[1].at).toBeGreaterThanOrEqual(P + 2 * MIN);
-    expect(mockEvents[1].at).toBeLessThan(P + 4 * MIN);
+    expect(mockEvents[1].at).toBeGreaterThanOrEqual(P + 3 * MIN);
+    expect(mockEvents[1].at).toBeLessThan(P + 5 * MIN);
     expect(result.outcome).toBe('verified');
   });
 
@@ -135,5 +135,31 @@ describe('ysocialVerifyPostWorkflowV102 in time lapse', () => {
     ]);
     expect(mockEvents[1].at).toBeGreaterThanOrEqual(R + 3 * MIN);
     expect(mockEvents[1].at).toBeLessThan(R + 4 * MIN + 1);
+  });
+
+  it('does not report post.not_found when a post that stayed queued goes out and the platform finds it after 2 minutes', async () => {
+    // ERROR, retry at +30 min, 5 minutes on QUEUE, then published.
+    const R30 = T0 + 30 * MIN;
+    const P = R30 + 5 * MIN;
+    mockActivities.ysocialCheckPostOnPlatform.mockImplementation(async () => ({
+      result: Date.now() < P + 2 * MIN ? 'not_found' : 'found',
+    }));
+    const result = await run((now) =>
+      now >= P
+        ? { state: 'PUBLISHED', updatedAt: iso(P) }
+        : now >= R30
+        ? { state: 'QUEUE', updatedAt: iso(R30) }
+        : { state: 'ERROR', updatedAt: iso(U1) }
+    );
+
+    expect(mockEvents.map((e) => e.kind)).toEqual([
+      'post.failed',
+      'post.not_published',
+      'post.verified',
+    ]);
+    expect(mockEvents[1].at).toBeGreaterThanOrEqual(R30 + 3 * MIN);
+    expect(mockEvents[1].at).toBeLessThan(P);
+    expect(mockEvents[2].at).toBeGreaterThanOrEqual(P + 2 * MIN);
+    expect(result.outcome).toBe('verified');
   });
 });

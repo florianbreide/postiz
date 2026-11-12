@@ -103,11 +103,15 @@ Zustellung: Jedes Ereignis bekommt einen eigenen Workflow `ysocial-event-<id>`. 
 |---|---|
 | `ERROR` | sofort `post.failed`. Steht der Post bei einer Nachschau mit anderem `updatedAt` auf `ERROR`, wieder `post.failed` mit neuer Kennung |
 | `QUEUE` ab Termin + 3 min | `post.not_published`. Nach „Erneut versuchen“: ab Retry + 3 min |
-| `PUBLISHED` | Prüfung auf der Plattform: gefunden `post.verified`, nicht prüfbar `post.unverifiable`, nicht gefunden ab Termin + 4 min `post.not_found`. Nach „Erneut versuchen“: ab Veröffentlichung + 4 min |
+| `PUBLISHED` | Prüfung auf der Plattform: gefunden `post.verified`, nicht prüfbar `post.unverifiable`, nicht gefunden ab Termin + 4 min `post.not_found`. War vorher `post.failed` oder `post.not_published` gemeldet: ab Veröffentlichung + 4 min |
 | gelöscht, Entwurf, neuer Termin | ohne Meldung vorher nichts, sonst `post.resolved` |
 
 - Nach einer Meldung schaut der Workflow nach 1, 2, 5, 10, 15 und 30 Minuten wieder nach, dann stündlich, 24 Stunden lang. Geht der Post in dieser Zeit raus, kommt `post.verified` und der Alarm schließt sich.
-- „Erneut versuchen“ erkennt der Workflow daran, dass ein gemeldeter Post wieder auf `QUEUE` oder `PUBLISHED` steht. Der Zeitpunkt ist `updatedAt` des Posts: Die Retry-Route setzt `QUEUE`, Postiz setzt beim Veröffentlichen `PUBLISHED`, beides schreibt die Zeile. Ab dann gelten die Fristen von oben, und die 24 Stunden der Nachschau beginnen neu. Auf `QUEUE` schaut er bis zur Frist jede Minute nach. Steht der Post 3 Minuten nach dem Retry noch auf `QUEUE`, kommt `post.not_published`. Im Hub ersetzt es den Alarm „fehlgeschlagen“. Findet die Plattform den Post 4 Minuten nach dem Veröffentlichen nicht, kommt `post.not_found`.
+- „Erneut versuchen“ erkennt der Workflow daran, dass ein Post nach `post.failed` wieder auf `QUEUE` steht. Die Retry-Route setzt `QUEUE`, Postiz setzt beim Veröffentlichen `PUBLISHED`. Beides schreibt die Zeile, also nennt `updatedAt` den Zeitpunkt. Es zählt der erste Wert, den der Workflow im Zustand sieht. Spätere Schreibzugriffe, etwa Medien oder Statistik, verschieben die Frist nicht. Ein neues `post.failed` setzt beide Zeitpunkte zurück, ein weiterer Retry bekommt eigene.
+- Ab dem Retry gelten die Fristen aus der Tabelle, und die 24 Stunden der Nachschau beginnen neu. Bis zur Frist schaut der Workflow auf `QUEUE` jede Minute nach. Den Retry bemerkt er aber erst bei der nächsten Nachschau, nach der ersten Stunde also bis zu 60 Minuten später. Dann kann `post.not_published` sofort kommen.
+- Steht der Post 3 Minuten nach dem Retry noch auf `QUEUE`, kommt `post.not_published` mit dem Grund „3 Minuten nach „Erneut versuchen“ noch auf „geplant““. Im Hub ersetzt es den Alarm „fehlgeschlagen“.
+- Findet die Plattform den Post 4 Minuten nach dem Veröffentlichen nicht, kommt `post.not_found` mit dem Grund „4 Minuten nach dem Veröffentlichen“. Das gilt auch für einen verspäteten Post ohne Retry, für den `post.not_published` gemeldet war.
+- `ysocialVerifyPostWorkflowV101` rechnet ab dem Termin. Nach einem Retry, der Stunden später rausgeht, meldet er sofort `post.not_found`, wenn die Plattform den Post in der ersten Minute noch nicht findet.
 - Die Plattformprüfung ruft nur `postAnalytics` des Providers mit dem gespeicherten Token auf, ohne Token-Refresh. Je Aufruf steht im Log `provider call postAnalytics provider=<id> post=<postId> result=<found|not_found>`. Höchstens 5 Aufrufe laufen gleichzeitig.
 - Antwortet die Plattform dreimal nicht, gilt der Post als nicht prüfbar, ohne Alarm.
 
@@ -242,9 +246,9 @@ Im Log steht je Aufruf `retry post=<postId> actor=<X-Ysocial-Actor> result=<star
 
 Für die Oberfläche (PR 23):
 - Eine Bestätigung bei `reason: "published"` sendet den ganzen Post noch einmal, bei einem Thread auch den ersten Post.
-- Bei einem wiederholten Post (`intervalInDays`), dessen Termin mehr als 2 Stunden zurückliegt, legt Postiz den Termin auf die nächste Wiederholung (`reanchorInterval` in `apps/orchestrator/src/activities/post.activity.ts`). „Erneut versuchen“ postet dann nicht sofort.
+- Bei einem wiederholten Post (`intervalInDays`), dessen Termin mehr als 2 Stunden zurückliegt, wartet Postiz bis zur nächsten Wiederholung (`reanchorInterval` in `apps/orchestrator/src/activities/post.activity.ts`). Den neuen Zeitpunkt rechnet es nur im Workflow aus, der Termin in der Datenbank bleibt. „Erneut versuchen“ postet dann nicht sofort. Der Post bleibt auf `QUEUE`, und ab 0.7.3 meldet die Post-Prüfung 3 Minuten nach dem Retry `post.not_published`. Liegt die nächste Wiederholung mehr als 24 Stunden nach dem Retry, endet die Prüfung vorher, und der Alarm bleibt offen. Offen ist, ob die Route solche Posts abweisen soll.
 - Der alte Fehlertext bleibt bei `QUEUE` im Feld `error` stehen, die Lese-API zeigt ihn weiter.
-- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE` und meldet dabei nichts, solange die Frist von 3 Minuten ab dem Retry läuft. Geht der Post raus, schließt `post.verified` den Alarm. Scheitert er wieder, kommt `post.failed` mit neuer Kennung. Bleibt er auf `QUEUE`, kommt `post.not_published` (ab 0.7.3, vorher nichts). Ist die Nachschau schon beendet (24 Stunden nach der Meldung), prüft kein Workflow mehr. Dann meldet nur noch `DailyHealth` am nächsten Morgen, und nur ein neues Scheitern.
+- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE` und meldet nichts, solange die Frist von 3 Minuten ab dem Retry läuft. Geht der Post raus, schließt `post.verified` den Alarm. Scheitert er wieder, kommt `post.failed` mit neuer Kennung. Bleibt er auf `QUEUE`, kommt `post.not_published` (ab 0.7.3, vorher nichts). Ist die Nachschau schon beendet (24 Stunden nach der Meldung), prüft kein Workflow mehr. Dann meldet nur noch `DailyHealth` am nächsten Morgen, und nur ein neues Scheitern.
 
 ### Unklarer Ausgang
 

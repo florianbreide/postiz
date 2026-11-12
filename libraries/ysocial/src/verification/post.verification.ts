@@ -16,6 +16,9 @@ import {
  *   auffindbar". Providers without a rule: "nicht prüfbar", no alarm.
  * - A reported post that goes out later, is deleted, becomes a draft again or
  *   gets a new date reports that, and the hub closes the alarm.
+ * - From ysocialVerifyPostWorkflowV102 (deadlineAfterRetry): after
+ *   "Erneut versuchen" the clock for QUEUE starts at the retry, and for a
+ *   reported post that is published later at the publish.
  *
  * Pure functions without I/O. They run inside the Temporal workflow, so no
  * Node.js imports here.
@@ -70,8 +73,12 @@ export interface VerificationMemory {
   problem?: ProblemKind;
   // updatedAt of the post when post.failed was reported.
   failedUpdatedAt?: string;
-  // After "Erneut versuchen": updatedAt of the post at the retry or at the
-  // switch to PUBLISHED, in ms. The follow-up time starts there.
+  // deadlineAfterRetry: updatedAt of the post, in ms, when a failed post was
+  // first seen on QUEUE again ("Erneut versuchen") and when a reported post
+  // was first seen PUBLISHED. A new post.failed clears both.
+  requeuedAt?: number;
+  publishedAt?: number;
+  // The latest of both, never cleared: the follow-up time starts there.
   retriedAt?: number;
   followUps: number;
   // How often each kind was reported for this scheduled time, for the ids.
@@ -110,8 +117,12 @@ export const postFailedStateKey = (publishDate: string, updatedAt?: string) =>
 const REASONS = {
   notPublished: 'Der Post steht 3 Minuten nach dem Termin noch auf „geplant“.',
   disconnected: 'Der Kanal ist getrennt oder muss neu verbunden werden.',
+  notPublishedAfterRetry:
+    'Der Post steht 3 Minuten nach „Erneut versuchen“ noch auf „geplant“.',
   notFound:
     'Postiz meldet „veröffentlicht“, die Plattform findet den Post 4 Minuten nach dem Termin nicht.',
+  notFoundAfterPublish:
+    'Postiz meldet „veröffentlicht“, die Plattform findet den Post 4 Minuten nach dem Veröffentlichen nicht.',
   verified: 'Der Post ist auf der Plattform abrufbar.',
   deleted: 'Der Post wurde gelöscht.',
   draft: 'Der Post ist wieder ein Entwurf.',
@@ -279,9 +290,10 @@ export const nextVerificationStep = (input: {
   // from postFailedStateKey. ysocialVerifyPostWorkflow passes nothing and
   // keeps its ids, so its running workflows replay unchanged.
   failedPerAttempt?: boolean;
-  // ysocialVerifyPostWorkflowV102: after "Erneut versuchen" the deadlines of
-  // post.not_published and post.not_found start at the retry or at the switch
-  // to PUBLISHED, not at the scheduled time. Older versions pass nothing.
+  // ysocialVerifyPostWorkflowV102: after "Erneut versuchen" the deadline of
+  // post.not_published starts at the retry, and for a reported post that is
+  // published later the deadline of post.not_found at the publish, not at
+  // the scheduled time. Older versions pass nothing.
   deadlineAfterRetry?: boolean;
 }): VerificationStep => {
   const { postId, snapshot, platform, now, failedPerAttempt } = input;
@@ -344,36 +356,67 @@ export const nextVerificationStep = (input: {
     );
     return followUp(
       reported.events,
-      { ...reported.memory, failedUpdatedAt: snapshot.updatedAt },
+      {
+        ...reported.memory,
+        failedUpdatedAt: snapshot.updatedAt,
+        // A retry after this failure gets its own times.
+        ...(input.deadlineAfterRetry
+          ? { requeuedAt: undefined, publishedAt: undefined }
+          : {}),
+      },
       now
     );
   }
 
-  // QUEUE or PUBLISHED after a reported failure: "Erneut versuchen". The
-  // retry and the publish both write the post, so updatedAt tells when.
-  const retried =
-    !!input.deadlineAfterRetry &&
-    memory.problem === 'post.failed' &&
-    !!snapshot.updatedAt &&
-    snapshot.updatedAt !== memory.failedUpdatedAt;
-  const clockMs = retried
-    ? Math.max(publishMs, Date.parse(snapshot.updatedAt!))
-    : publishMs;
-  if (retried) {
-    memory = { ...memory, retriedAt: clockMs };
+  // "Erneut versuchen" puts a failed post back to QUEUE, Postiz then
+  // publishes it. Both write the post, so updatedAt tells when. Only the
+  // first one seen counts: a later write must not move the deadline.
+  if (input.deadlineAfterRetry && snapshot.updatedAt) {
+    const at = Date.parse(snapshot.updatedAt);
+    if (
+      snapshot.state === 'QUEUE' &&
+      memory.problem === 'post.failed' &&
+      memory.requeuedAt === undefined &&
+      snapshot.updatedAt !== memory.failedUpdatedAt
+    ) {
+      memory = { ...memory, requeuedAt: at };
+    }
+    if (
+      snapshot.state === 'PUBLISHED' &&
+      (memory.problem === 'post.failed' ||
+        memory.problem === 'post.not_published') &&
+      memory.publishedAt === undefined
+    ) {
+      memory = { ...memory, publishedAt: at };
+    }
+    const latest = Math.max(memory.requeuedAt ?? 0, memory.publishedAt ?? 0);
+    if (latest > (memory.retriedAt ?? 0)) {
+      memory = { ...memory, retriedAt: latest };
+    }
   }
 
   if (snapshot.state === 'QUEUE') {
-    const deadline = clockMs + NOT_PUBLISHED_AFTER_MS;
+    const afterRetry =
+      memory.requeuedAt !== undefined && memory.requeuedAt > publishMs;
+    const deadline =
+      (afterRetry ? memory.requeuedAt! : publishMs) + NOT_PUBLISHED_AFTER_MS;
     if (now < deadline) {
       return wait([], memory, Math.min(deadline, now + CHECK_EVERY_MS));
     }
-    if (memory.problem && !retried) {
+    // After the retry only post.failed is reported, so the post still being
+    // queued is news. Any other problem was reported already.
+    if (
+      memory.problem &&
+      !(memory.requeuedAt !== undefined && memory.problem === 'post.failed')
+    ) {
       return followUp([], memory, now);
     }
-    const reason = snapshot.integration.disconnected
-      ? `${REASONS.notPublished} ${REASONS.disconnected}`
+    const notPublished = afterRetry
+      ? REASONS.notPublishedAfterRetry
       : REASONS.notPublished;
+    const reason = snapshot.integration.disconnected
+      ? `${notPublished} ${REASONS.disconnected}`
+      : notPublished;
     const reported = report(
       'post.not_published',
       postId,
@@ -426,7 +469,10 @@ export const nextVerificationStep = (input: {
     return finish([event], { ...next, problem: undefined }, 'unverifiable');
   }
 
-  const deadline = clockMs + NOT_FOUND_AFTER_MS;
+  const afterPublish =
+    memory.publishedAt !== undefined && memory.publishedAt > publishMs;
+  const deadline =
+    (afterPublish ? memory.publishedAt! : publishMs) + NOT_FOUND_AFTER_MS;
   if (now < deadline) {
     return wait([], memory, deadline);
   }
@@ -439,7 +485,7 @@ export const nextVerificationStep = (input: {
     snapshot,
     memory,
     now,
-    REASONS.notFound
+    afterPublish ? REASONS.notFoundAfterPublish : REASONS.notFound
   );
   return followUp(reported.events, reported.memory, now);
 };
