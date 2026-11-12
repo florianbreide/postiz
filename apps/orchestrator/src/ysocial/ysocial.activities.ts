@@ -106,7 +106,7 @@ export class YsocialActivities {
 
   // PostVerification: starts ysocial-verify-<postId> for every due post.
   // A post that already has its workflow is skipped by Temporal, also when
-  // it still runs the older ysocialVerifyPostWorkflow.
+  // it still runs an older version of ysocialVerifyPostWorkflow.
   async ysocialStartPostVerifications(input?: {
     windowMinutes?: number;
   }): Promise<{ due: number; started: number; alreadyStarted: number }> {
@@ -127,7 +127,7 @@ export class YsocialActivities {
     for (const postId of postIds) {
       try {
         await client.workflow.start(
-          'ysocialVerifyPostWorkflowV101',
+          'ysocialVerifyPostWorkflowV102',
           verifyPostStartOptions(postId, taskQueue)
         );
         started++;

@@ -97,16 +97,17 @@ Zustellung: Jedes Ereignis bekommt einen eigenen Workflow `ysocial-event-<id>`. 
 ## PostVerification (PR 17, E22)
 
 - Schedule `ysocial-post-verification` startet jede Minute `ysocialPostVerificationWorkflow`. Die Aktivität liest alle Posts mit Termin in den letzten 60 Minuten: nur der erste Post eines Threads, ohne Entwürfe, ohne gelöschte. Für jeden startet sie `ysocial-verify-<postId>`. Temporal lehnt eine zweite Prüfung desselben Posts ab, solange es den Lauf aufbewahrt. Eine eigene Tabelle gibt es nicht.
-- `ysocialVerifyPostWorkflowV101` (ab 0.7.1) liest den Post jede Minute und entscheidet nach `libraries/ysocial/src/verification/post.verification.ts`. `ysocialVerifyPostWorkflow` bleibt unverändert für Läufe, die vorher gestartet wurden. Er meldet `post.failed` je Lauf nur einmal, mit der Kennung `post.failed:<postId>:<Termin in ms>`:
+- `ysocialVerifyPostWorkflowV102` (ab 0.7.3) liest den Post jede Minute und entscheidet nach `libraries/ysocial/src/verification/post.verification.ts`. Die älteren Versionen bleiben unverändert für Läufe, die vorher gestartet wurden: `ysocialVerifyPostWorkflowV101` (0.7.1) rechnet die Fristen auch nach „Erneut versuchen“ ab dem Termin, `ysocialVerifyPostWorkflow` meldet außerdem `post.failed` je Lauf nur einmal, mit der Kennung `post.failed:<postId>:<Termin in ms>`:
 
 | Zustand | Ergebnis |
 |---|---|
 | `ERROR` | sofort `post.failed`. Steht der Post bei einer Nachschau mit anderem `updatedAt` auf `ERROR`, wieder `post.failed` mit neuer Kennung |
-| `QUEUE` ab Termin + 3 min | `post.not_published` |
-| `PUBLISHED` | Prüfung auf der Plattform: gefunden `post.verified`, nicht prüfbar `post.unverifiable`, nicht gefunden ab Termin + 4 min `post.not_found` |
+| `QUEUE` ab Termin + 3 min | `post.not_published`. Nach „Erneut versuchen“: ab Retry + 3 min |
+| `PUBLISHED` | Prüfung auf der Plattform: gefunden `post.verified`, nicht prüfbar `post.unverifiable`, nicht gefunden ab Termin + 4 min `post.not_found`. Nach „Erneut versuchen“: ab Veröffentlichung + 4 min |
 | gelöscht, Entwurf, neuer Termin | ohne Meldung vorher nichts, sonst `post.resolved` |
 
 - Nach einer Meldung schaut der Workflow nach 1, 2, 5, 10, 15 und 30 Minuten wieder nach, dann stündlich, 24 Stunden lang. Geht der Post in dieser Zeit raus, kommt `post.verified` und der Alarm schließt sich.
+- „Erneut versuchen“ erkennt der Workflow daran, dass ein gemeldeter Post wieder auf `QUEUE` oder `PUBLISHED` steht. Der Zeitpunkt ist `updatedAt` des Posts: Die Retry-Route setzt `QUEUE`, Postiz setzt beim Veröffentlichen `PUBLISHED`, beides schreibt die Zeile. Ab dann gelten die Fristen von oben, und die 24 Stunden der Nachschau beginnen neu. Auf `QUEUE` schaut er bis zur Frist jede Minute nach. Steht der Post 3 Minuten nach dem Retry noch auf `QUEUE`, kommt `post.not_published`. Im Hub ersetzt es den Alarm „fehlgeschlagen“. Findet die Plattform den Post 4 Minuten nach dem Veröffentlichen nicht, kommt `post.not_found`.
 - Die Plattformprüfung ruft nur `postAnalytics` des Providers mit dem gespeicherten Token auf, ohne Token-Refresh. Je Aufruf steht im Log `provider call postAnalytics provider=<id> post=<postId> result=<found|not_found>`. Höchstens 5 Aufrufe laufen gleichzeitig.
 - Antwortet die Plattform dreimal nicht, gilt der Post als nicht prüfbar, ohne Alarm.
 
@@ -234,7 +235,7 @@ Für die Oberfläche (PR 23):
 - Eine Bestätigung bei `reason: "published"` sendet den ganzen Post noch einmal, bei einem Thread auch den ersten Post.
 - Bei einem wiederholten Post (`intervalInDays`), dessen Termin mehr als 2 Stunden zurückliegt, legt Postiz den Termin auf die nächste Wiederholung (`reanchorInterval` in `apps/orchestrator/src/activities/post.activity.ts`). „Erneut versuchen“ postet dann nicht sofort.
 - Der alte Fehlertext bleibt bei `QUEUE` im Feld `error` stehen, die Lese-API zeigt ihn weiter.
-- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE` und meldet dabei nichts, `post.failed` ist schon gemeldet. Geht der Post raus, schließt `post.verified` den Alarm. Scheitert er wieder, kommt `post.failed` mit neuer Kennung. Nach den 24 Stunden der Nachschau meldet nur noch `DailyHealth` am nächsten Morgen.
+- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE` und meldet dabei nichts, solange die Frist von 3 Minuten ab dem Retry läuft. Geht der Post raus, schließt `post.verified` den Alarm. Scheitert er wieder, kommt `post.failed` mit neuer Kennung. Bleibt er auf `QUEUE`, kommt `post.not_published` (ab 0.7.3, vorher nichts). Ist die Nachschau schon beendet (24 Stunden nach der Meldung), prüft kein Workflow mehr. Dann meldet nur noch `DailyHealth` am nächsten Morgen, und nur ein neues Scheitern.
 
 ### Unklarer Ausgang
 

@@ -70,6 +70,9 @@ export interface VerificationMemory {
   problem?: ProblemKind;
   // updatedAt of the post when post.failed was reported.
   failedUpdatedAt?: string;
+  // After "Erneut versuchen": updatedAt of the post at the retry or at the
+  // switch to PUBLISHED, in ms. The follow-up time starts there.
+  retriedAt?: number;
   followUps: number;
   // How often each kind was reported for this scheduled time, for the ids.
   counts: Partial<Record<HubEventKind, number>>;
@@ -218,10 +221,12 @@ const followUp = (
   memory: VerificationMemory,
   now: number
 ): VerificationStep => {
-  // A post moved days ahead starts its follow-up time at the new date.
+  // A post moved days ahead starts its follow-up time at the new date, a
+  // retried post at the retry.
   const start = Math.max(
     memory.firstSeen ?? now,
-    memory.publishDate ? Date.parse(memory.publishDate) : 0
+    memory.publishDate ? Date.parse(memory.publishDate) : 0,
+    memory.retriedAt ?? 0
   );
   const horizon = start + FOLLOW_UP_FOR_MS;
   if (now >= horizon) {
@@ -274,6 +279,10 @@ export const nextVerificationStep = (input: {
   // from postFailedStateKey. ysocialVerifyPostWorkflow passes nothing and
   // keeps its ids, so its running workflows replay unchanged.
   failedPerAttempt?: boolean;
+  // ysocialVerifyPostWorkflowV102: after "Erneut versuchen" the deadlines of
+  // post.not_published and post.not_found start at the retry or at the switch
+  // to PUBLISHED, not at the scheduled time. Older versions pass nothing.
+  deadlineAfterRetry?: boolean;
 }): VerificationStep => {
   const { postId, snapshot, platform, now, failedPerAttempt } = input;
   let memory: VerificationMemory = {
@@ -340,12 +349,26 @@ export const nextVerificationStep = (input: {
     );
   }
 
+  // QUEUE or PUBLISHED after a reported failure: "Erneut versuchen". The
+  // retry and the publish both write the post, so updatedAt tells when.
+  const retried =
+    !!input.deadlineAfterRetry &&
+    memory.problem === 'post.failed' &&
+    !!snapshot.updatedAt &&
+    snapshot.updatedAt !== memory.failedUpdatedAt;
+  const clockMs = retried
+    ? Math.max(publishMs, Date.parse(snapshot.updatedAt!))
+    : publishMs;
+  if (retried) {
+    memory = { ...memory, retriedAt: clockMs };
+  }
+
   if (snapshot.state === 'QUEUE') {
-    const deadline = publishMs + NOT_PUBLISHED_AFTER_MS;
+    const deadline = clockMs + NOT_PUBLISHED_AFTER_MS;
     if (now < deadline) {
       return wait([], memory, Math.min(deadline, now + CHECK_EVERY_MS));
     }
-    if (memory.problem) {
+    if (memory.problem && !retried) {
       return followUp([], memory, now);
     }
     const reason = snapshot.integration.disconnected
@@ -403,7 +426,7 @@ export const nextVerificationStep = (input: {
     return finish([event], { ...next, problem: undefined }, 'unverifiable');
   }
 
-  const deadline = publishMs + NOT_FOUND_AFTER_MS;
+  const deadline = clockMs + NOT_FOUND_AFTER_MS;
   if (now < deadline) {
     return wait([], memory, deadline);
   }
