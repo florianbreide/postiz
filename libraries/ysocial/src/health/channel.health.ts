@@ -10,6 +10,12 @@ import { createHubEvent, HubEvent, HubEventKind } from '../events/hub.event';
  * updatedAt: the same state gives the same id, a reconnect a new one.
  * "Zugang ungültig" leaves updatedAt as it is, so its id and the one of the
  * way back also carry `since`, the run that first saw the problem.
+ *
+ * "Zugang ungültig" ends with a new token or with the next platform call
+ * that passes, not with any other change of the channel (name, posting
+ * times). The token itself is not read: Postiz writes tokenExpiration with
+ * every new token (connect, reconnect, page selection, refresh) and with
+ * nothing else.
  */
 
 export const TOKEN_EXPIRY_WARN_MS = 7 * 24 * 60 * 60_000;
@@ -39,6 +45,10 @@ export interface ChannelProblemState {
   updatedAt: number;
   // Run that first reported the problem. Kept while the problem lasts.
   since: string;
+  // channel.auth_invalid only: tokenExpiration of the channel when the
+  // problem was reported, in ms, null for none. Missing in states written
+  // before 0.7.5.
+  tokenExpiration?: number | null;
 }
 
 export type ChannelProblems = Record<string, ChannelProblemState>;
@@ -80,7 +90,17 @@ export const tokenExpiry = (row: ChannelRow, now: number) => {
 
 const updatedMs = (row: ChannelRow) => row.updatedAt?.getTime() || 0;
 
+const expirationMs = (row: ChannelRow) =>
+  row.tokenExpiration?.getTime() ?? null;
+
 const sinceMs = (state: ChannelProblemState) => Date.parse(state.since) || 0;
+
+// The channel has a new token since the problem was reported. A state
+// without tokenExpiration (before 0.7.5) cannot tell, it waits for the next
+// platform call that passes.
+const newToken = (state: ChannelProblemState, row: ChannelRow) =>
+  state.tokenExpiration !== undefined &&
+  state.tokenExpiration !== expirationMs(row);
 
 export const channelEvent = (
   kind: HubEventKind,
@@ -129,8 +149,8 @@ export const tokenExpiringEvent = (row: ChannelRow, now: number) => {
  *
  * - flag set, not reported as disconnected: channel.disconnected
  * - flag gone after channel.disconnected: channel.reconnected
- * - channel.auth_invalid and the channel changed since (new token):
- *   channel.reconnected
+ * - channel.auth_invalid and a new token since (tokenExpiration changed):
+ *   channel.reconnected. Other changes of the channel keep it.
  * - authInvalid (DailyHealth only): channel.auth_invalid, if not reported
  * - authOk (DailyHealth only) after channel.auth_invalid: channel.reconnected
  * - reported channel no longer there: channel.removed
@@ -200,6 +220,7 @@ export const diffChannels = (input: {
           kind: 'channel.auth_invalid',
           updatedAt: updated,
           since,
+          tokenExpiration: expirationMs(row),
         };
       }
       continue;
@@ -208,7 +229,7 @@ export const diffChannels = (input: {
     const reconnected =
       before?.kind === 'channel.disconnected' ||
       (before?.kind === 'channel.auth_invalid' &&
-        (updated > before.updatedAt || authOk.has(row.id)));
+        (newToken(before, row) || authOk.has(row.id)));
 
     if (reconnected) {
       events.push(
