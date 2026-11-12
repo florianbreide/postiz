@@ -14,8 +14,9 @@ import { createHubEvent, HubEvent, HubEventKind } from '../events/hub.event';
  * "Zugang ungültig" ends with a new token or with the next platform call
  * that passes, not with any other change of the channel (name, posting
  * times). The token itself is not read: Postiz writes tokenExpiration with
- * every new token (connect, reconnect, page selection, refresh) and with
- * nothing else.
+ * every new token that comes with an expiry (connect, reconnect, page
+ * selection, refresh) and with nothing else. Exceptions: orchestrator
+ * README, "Kanal-Prüfung und DailyHealth".
  */
 
 export const TOKEN_EXPIRY_WARN_MS = 7 * 24 * 60 * 60_000;
@@ -46,8 +47,8 @@ export interface ChannelProblemState {
   // Run that first reported the problem. Kept while the problem lasts.
   since: string;
   // channel.auth_invalid only: tokenExpiration of the channel when the
-  // problem was reported, in ms, null for none. Missing in states written
-  // before 0.7.5.
+  // platform last rejected it, in ms, null for none. Missing in states
+  // written before 0.7.5, until a daily run rejects the channel again.
   tokenExpiration?: number | null;
 }
 
@@ -95,9 +96,9 @@ const expirationMs = (row: ChannelRow) =>
 
 const sinceMs = (state: ChannelProblemState) => Date.parse(state.since) || 0;
 
-// The channel has a new token since the problem was reported. A state
+// The channel has a new token since the platform last rejected it. A state
 // without tokenExpiration (before 0.7.5) cannot tell, it waits for the next
-// platform call that passes.
+// platform call.
 const newToken = (state: ChannelProblemState, row: ChannelRow) =>
   state.tokenExpiration !== undefined &&
   state.tokenExpiration !== expirationMs(row);
@@ -200,7 +201,10 @@ export const diffChannels = (input: {
 
     if (authInvalid[row.id]) {
       if (before?.kind === 'channel.auth_invalid') {
-        next[row.id] = before;
+        // Still rejected, maybe with a newer token than the one reported.
+        // Only a token after the one checked now ends the problem. The ids
+        // stay, they carry updatedAt and since of the report.
+        next[row.id] = { ...before, tokenExpiration: expirationMs(row) };
       } else {
         // A new problem after channel.reconnected keeps updatedAt. since,
         // this run, tells the two apart.
@@ -273,7 +277,10 @@ const sameProblem = (
 ) =>
   !a || !b
     ? !a && !b
-    : a.kind === b.kind && a.updatedAt === b.updatedAt && a.since === b.since;
+    : a.kind === b.kind &&
+      a.updatedAt === b.updatedAt &&
+      a.since === b.since &&
+      a.tokenExpiration === b.tokenExpiration;
 
 export const problemChanges = (
   previous: ChannelProblems,
