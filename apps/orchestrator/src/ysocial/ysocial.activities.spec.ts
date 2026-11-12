@@ -159,7 +159,7 @@ describe('ysocialStartPostVerifications', () => {
         throw new WorkflowExecutionAlreadyStartedError(
           'already started',
           options.workflowId,
-          'ysocialVerifyPostWorkflowV101'
+          'ysocialVerifyPostWorkflowV102'
         );
       }
       return {};
@@ -196,9 +196,9 @@ describe('ysocialStartPostVerifications', () => {
     expect(
       start.mock.calls.map(([type, options]) => [type, options.workflowId])
     ).toEqual([
-      ['ysocialVerifyPostWorkflowV101', 'ysocial-verify-post-1'],
-      ['ysocialVerifyPostWorkflowV101', 'ysocial-verify-post-2'],
-      ['ysocialVerifyPostWorkflowV101', 'ysocial-verify-post-3'],
+      ['ysocialVerifyPostWorkflowV102', 'ysocial-verify-post-1'],
+      ['ysocialVerifyPostWorkflowV102', 'ysocial-verify-post-2'],
+      ['ysocialVerifyPostWorkflowV102', 'ysocial-verify-post-3'],
     ]);
   });
 
