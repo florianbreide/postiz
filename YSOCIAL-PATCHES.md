@@ -46,9 +46,9 @@ Geplant in Phase 1: Patch 3 in `libraries/nestjs-libraries/src/database/prisma/p
 
 | Ordner | Inhalt |
 |---|---|
-| `apps/backend/src/ysocial/` | `YsocialModule`, `GET /ysocial/status` mit dem Zustand des Workers und die Lese-API `GET /ysocial/customers`, `/integrations`, `/posts`, alle hinter `YsocialTokenGuard`, Tests |
+| `apps/backend/src/ysocial/` | `YsocialModule`, `GET /ysocial/status` mit dem Zustand des Workers, die Lese-API `GET /ysocial/customers`, `/integrations`, `/posts`, „Erneut versuchen“ `POST /ysocial/posts/:id/retry` und der Testschalter `POST`/`DELETE /ysocial/test/integrations/:id/invalid-token` (nur bei `YSOCIAL_TEST_ROUTES=true`, zusätzlich hinter `YsocialTestRoutesGuard`), alle hinter `YsocialTokenGuard`, Tests |
 | `apps/orchestrator/src/ysocial/` | `YsocialOrchestratorModule`: eigener Temporal-Worker (Namespace `ysocial`, Queue `ysocial-postiz`), Schedules, Aktivitäten und Workflows mit Präfix `ysocial`, Ereignisse an den Hub, `PostVerification`, Kanal-Prüfung, `DailyHealth`, Tests. Beschreibung in `README.md` dort |
-| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Konfiguration und Zustand des Workers, Ereignisse an den Hub, Regeln und Provider-Tabelle der Post-Prüfung, Kanal-Prüfung, Lese-API, lesende Datenbankzugriffe mit fester Feldliste, Modulversion, Jest-Konfiguration mit Stub für `@prisma/client` |
+| `libraries/ysocial/` | Gemeinsamer Code: Prüfung des Service-Tokens, Konfiguration und Zustand des Workers, Ereignisse an den Hub, Regeln und Provider-Tabelle der Post-Prüfung, Kanal-Prüfung mit Testschalter, Lese-API, Regeln und Dienst für „Erneut versuchen“, Datenbankzugriffe mit fester Feldliste (lesend, dazu der Wechsel `ERROR` → `QUEUE` für „Erneut versuchen“), Modulversion, Jest-Konfiguration mit Stub für `@prisma/client` |
 | `libraries/ysocial/upstream-check/` | Logik des Workflows `ysocial-upstream-check` (Basis lesen, Versionen vergleichen, Duplikate erkennen, Issue-Text), Tests und erfundene Testdaten |
 
 Die Statusroute antwortet ohne konfiguriertes `YSOCIAL_SERVICE_TOKEN` mit 503, ohne oder mit falschem Bearer-Token mit 401, mit dem richtigen mit 200. Die globalen Postiz-Guards lassen neue Controller durch. Der eigene Guard ist deshalb Pflicht für jeden ysocial-Controller. Ein Test prüft das für jeden Controller in `apps/backend/src/ysocial/`.
@@ -64,6 +64,8 @@ Tests: `pnpm exec jest -c libraries/ysocial/jest.config.js` (Node 22). Das Root-
 | `HUB_INTERNAL_TOKEN` | für den Worker | Gleicher Wert wie im Hub, mindestens 32 Zeichen | wie oben |
 | `YSOCIAL_TEMPORAL_NAMESPACE` | für den Worker | `ysocial`. Nie `default` oder der Wert von `TEMPORAL_NAMESPACE` | wie oben |
 | `YSOCIAL_WORKER_ENABLED` | nein | `false` schaltet den Worker ab. Ohne Wert läuft er, sobald die drei Variablen oben stimmen | – |
+| `YSOCIAL_TEST_ROUTES` | nein, nur Staging | `true` schaltet die Testrouten ein (Testschalter für die Kanal-Prüfung, PR 19). Auf Prod nie setzen | Testrouten antworten mit 404, der Testschalter wirkt nicht (fail-closed) |
+| `YSOCIAL_TEST_INTEGRATIONS` | nein, nur Staging | IDs der Kanäle von Y Social, durch Komma getrennt, für die der Testschalter gilt | Testschalter für jeden Kanal 403, keine Wirkung auf die Kanal-Prüfung |
 
 Die `.env.example` von Postiz bleibt unverändert, eine Änderung wäre ein Patch. Die Vorlage für diese Variablen steht deshalb im Hub: in der `.env.example` (PR 3) und in `infra/` (PR 7). Dort erzeugt `scripts/gen-secrets.sh` den Wert. Hub und Postiz-Container bekommen denselben Wert. Lokal beschreibt `docs/YSOCIAL-LOKAL.md` den Eintrag. Jede neue Variable des Forks kommt in diese Tabelle und in die Hub-Vorlage.
 
@@ -100,6 +102,7 @@ Ist die Basis gleich dem neuesten Release, meldet der Workflow nur „Kein neuer
 1. `git fetch upstream --tags`, das neue Tag in einen Branch `upstream-sync/<yyyy-mm>` mergen.
 2. Vor dem Merge lesen: Änderungen in `.github/workflows/`, `.claude/` und `CLAUDE.md`. Neue Upstream-Workflows sofort per `gh workflow disable` abschalten, ihre Dateien bleiben unverändert.
 3. Jeden Patch aus Tabelle 1 prüfen: Ist die Stelle noch da, passt der Grund noch?
+   Dazu „Erneut versuchen“: `git diff <alte Basis> <neues Tag> -- apps/orchestrator/src/workflows/post-workflows/ libraries/nestjs-libraries/src/database/prisma/posts/ apps/orchestrator/src/activities/post.activity.ts libraries/nestjs-libraries/src/integrations/social.abstract.ts`. Gleiche die Tabelle „Unklarer Ausgang“ in `apps/orchestrator/src/ysocial/README.md` mit `libraries/ysocial/src/retry/retry.rules.ts` und den Tests dort ab, wenn sich eins davon ändert: ein neuer Post-Workflow, `markUnconfirmed`, `handleActivityError`, die Fehlertexte vor dem ersten Plattformaufruf, `changeState`, `updatePost`, `updateResolvedRelease`, `changeDate` (setzt `releaseId` und `releaseURL` zurück), `handleDisconnect` und `PublishedWithError`, die Abbildung auf `RefreshToken` in `SocialAbstract`, die Bedingungen von `searchForMissingThreeHoursPosts` (darauf beruht `channel_inactive`) oder die Abfrage laufender Workflows in `startWorkflow`. Die Route ruft `startWorkflow` und nutzt damit automatisch den Workflow, den Postiz dort startet.
 4. Neue Dateien aus Tabelle 2 auf Konflikte mit neuen Upstream-Dateien prüfen.
 5. `pnpm install`, Tests aus den ysocial-Ordnern, lokaler Start nach `docs/YSOCIAL-LOKAL.md`.
 6. Staging nach `docs/STAGING-TESTPLAN.md` prüfen und das Protokoll in den PR schreiben.

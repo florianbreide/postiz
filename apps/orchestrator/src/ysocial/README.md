@@ -165,6 +165,94 @@ Hinter `YsocialTokenGuard` wie `/ysocial/status`, von außen gesperrt (`/api/yso
 
 Nie dabei: `token`, `refreshToken`, `customInstanceDetails`, `settings`, `additionalSettings`, `internalId`, Posttext (`content`) und Medien (`image`). Die Feldlisten stehen in `libraries/ysocial/src/database/ysocial.read.repository.ts`. Posttext und Medien für die Vorschau in PR 23 sind eine eigene Entscheidung.
 
+## Erneut versuchen (Backend, PR 19)
+
+`POST /ysocial/posts/:id/retry`, hinter `YsocialTokenGuard`, von außen gesperrt wie die Lese-API. Der Hub prüft die Rolle der Person (E32) und schickt sie im Kopf `X-Ysocial-Actor` mit.
+
+    POST /ysocial/posts/<postId>/retry
+    Authorization: Bearer <YSOCIAL_SERVICE_TOKEN>
+    X-Ysocial-Actor: <wer im Hub geklickt hat>
+    Content-Type: application/json
+
+    {}                         oder bei unklarem Ausgang nach Rückfrage: {"confirmUnclear": true}
+
+Die Route setzt den Post von `ERROR` auf `QUEUE` und ruft `PostsService.startWorkflow` von Postiz. Der startet `postWorkflowV112` wie beim Umplanen in Postiz. Die Route ruft nie selbst einen Provider auf, gepostet wird nur über den Workflow von Postiz.
+
+- Vorher fragt sie Temporal mit derselben Abfrage wie `startWorkflow`, ob für den Post noch ein Workflow läuft (`postId="…" AND ExecutionStatus="Running"`). Postiz setzt `ERROR` und versucht es im selben Workflow noch einmal. `startWorkflow` würde diesen Workflow beenden, während sein Provider-Aufruf weiterläuft, und dann ein zweites Mal posten. Läuft ein Workflow, kommt 409 `workflow_running`. Das gilt auch, wenn ein wiederholter Post (`intervalInDays`) oder ein Plug noch wartet. Erst danach fragt die Route nach der Bestätigung eines unklaren Ausgangs. Niemand soll „noch nicht online“ bestätigen, während Postiz vielleicht gerade postet.
+- Antwortet Temporal nicht, kommt 503 `temporal_unavailable`, und nichts ändert sich. `startWorkflow` verschluckt eigene Fehler, ohne diese Prüfung bliebe der Post auf `QUEUE` ohne Workflow. Fällt Temporal genau zwischen Prüfung und Start aus, bleibt das möglich. Der Postiz-Sweep `missing-post-workflow` startet solche Posts stündlich neu, aber nur mit Termin in den letzten 2 Tagen.
+- Der Wechsel auf `QUEUE` gilt nur, wenn der Post noch auf `ERROR` steht (`updateMany` mit `state: 'ERROR'`). Zwei Klicks gleichzeitig ergeben einen Workflow-Start und einmal 409.
+
+| Antwort | `code` | Wann |
+|---|---|---|
+| 202 `{"id":"…","state":"QUEUE"}` | – | Post auf `QUEUE`, Start bei Temporal angefordert |
+| 400 | `actor_missing` | `X-Ysocial-Actor` fehlt, ist länger als 200 Zeichen oder enthält andere Zeichen als `A–Z`, `a–z`, `0–9` und `_ . @ + : -` (E-Mail-Adresse oder ID, keine Umlaute) |
+| 400 | – | `confirmUnclear` ist kein Boolean |
+| 401, 503 | – | Service-Token falsch oder nicht konfiguriert, wie `/ysocial/status` |
+| 404 | `not_found` | Post unbekannt |
+| 409 | `deleted` | Post gelöscht |
+| 409 | `not_first_post` | Kommentar eines Threads. Postiz setzt `ERROR` am ersten Post, und `postWorkflowV112` würde einen Kommentar als eigenen Post senden |
+| 409 | `already_queued` | Post steht schon auf `QUEUE` |
+| 409 | `not_failed` | Zustand `PUBLISHED` oder `DRAFT`, steht in `state` |
+| 409 | `channel_inactive` | Kanal gelöscht, `disabled`, `refreshNeeded` oder `inBetweenSteps`, steht in `flag`. Dieselben Bedingungen wie beim Sweep `searchForMissingThreeHoursPosts` von Postiz |
+| 409 | `unclear_outcome` | Unklarer Ausgang ohne `"confirmUnclear": true`, `reason` siehe unten |
+| 409 | `workflow_running` | Für den Post läuft noch ein Postiz-Workflow |
+| 409 | `state_changed` | Der Post hat zwischen Lesen und Schreiben den Zustand gewechselt, zum Beispiel durch einen zweiten Klick |
+| 503 | `temporal_unavailable` | Temporal antwortet nicht, nichts geändert |
+
+Im Log steht je Aufruf `retry post=<postId> actor=<X-Ysocial-Actor> result=<started|rejected code=…>`, nach Bestätigung mit `confirmed=<reason>`. Posttext steht nie darin. Bei `not_found` steht dort `post=-`, der rohe Pfad kommt nie ins Log.
+
+Für die Oberfläche (PR 23):
+- Eine Bestätigung bei `reason: "published"` sendet den ganzen Post noch einmal, bei einem Thread auch den ersten Post.
+- Bei einem wiederholten Post (`intervalInDays`), dessen Termin mehr als 2 Stunden zurückliegt, legt Postiz den Termin auf die nächste Wiederholung (`reanchorInterval` in `apps/orchestrator/src/activities/post.activity.ts`). „Erneut versuchen“ postet dann nicht sofort.
+- Der alte Fehlertext bleibt bei `QUEUE` im Feld `error` stehen, die Lese-API zeigt ihn weiter.
+- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE`. Fällt eine Nachschau in diese Zeit, meldet er `post.not_published`, `post.verified` schließt den Alarm danach.
+
+### Unklarer Ausgang
+
+Postiz v2.25.3 hat kein Feld für einen unklaren Ausgang. `markUnconfirmed` in `apps/orchestrator/src/workflows/post-workflows/post.workflow.v1.1.2.ts` setzt `ERROR` und schreibt den rohen Fehler nach `Post.error` (`PostsRepository.changeState`: Text bleibt Text, alles andere wird `JSON.stringify`). Temporal-Fehler stehen dort als JSON, zum Beispiel `{"cause":{"timeoutType":"START_TO_CLOSE",…},"activityType":"postSocialPending",…}`.
+
+Die Route verlangt deshalb immer eine Bestätigung, außer `releaseId` und `releaseURL` sind leer und der Fehler belegt, dass nichts rausging (fail-closed, Entscheidung für PR 19). Die Regel steht in `libraries/ysocial/src/retry/retry.rules.ts` (`unclearOutcome`), je Fall gibt es einen Test.
+
+| `Post.error` | Quelle in v2.25.3 | Ergebnis |
+|---|---|---|
+| `releaseId` oder `releaseURL` gesetzt, egal welcher Fehler | `updatePost` setzt beide, sobald ein Post raus ist. Bei einem Thread ist der erste Post raus, ein Kommentar scheitert, `changeState` setzt den ersten Post auf `ERROR`. `PublishedWithError` (`social.abstract.ts`, YouTube-Thumbnail): `PostActivity.handleDisconnect` speichert vorher beide per `updateResolvedRelease`. Ein früher veröffentlichter Post, den `changePostStatus` wieder auf `QUEUE` gesetzt hat, behält sie auch. Umplanen im Kalender (`changeDate` mit `schedule`) löscht beide | Bestätigung, `reason: "published"` |
+| JSON mit `activityType: "postComment"` | Kommentare laufen erst nach dem ersten Post | Bestätigung, `published` |
+| `No Post` | `postWorkflowV112`: Post nicht gefunden | keine Bestätigung |
+| `Refresh channel needed` | `postWorkflowV112`: Kanal braucht neue Verbindung, vor jedem Plattformaufruf | keine Bestätigung |
+| `Channel disabled` | `postWorkflowV112`: Kanal abgeschaltet, vor jedem Plattformaufruf | keine Bestätigung |
+| JSON mit `cause.type: "refresh_token"` und `activityType` `postSocialPending` oder `postSocial` | `handleActivityError` → `stop`: Token-Refresh beim ersten Veröffentlichen gescheitert. Postiz selbst veröffentlicht nach einem gelungenen Refresh erneut, nimmt also auch an, dass nichts rausging. Restrisiko: `RefreshToken` kommt aus jeder 401 innerhalb von `post()`, und `Post.error` hält nur den letzten von bis zu 5 Versuchen. Ein früherer Versuch mit unklarem Ausgang ist dann nicht mehr sichtbar | keine Bestätigung |
+| JSON mit `cause.type: "bad_body"`, auch in `postSocialPending`, `checkPostStatus` und `finalizePost` | `bad_body` belegt nichts: `SocialAbstract.fetch` macht aus 500 und 429 nach 3 Versuchen `BadBody`, `runInConcurrent` aus jedem Fehler, auch aus Netzfehlern nach dem Upload. `facebook.provider.ts` (`checkPostStatus` bei Stories) wirft `BadBody` mit „Facebook may have already published part of the story“. Bei Stories mit mehreren Medien kann `finalizePost` nach dem ersten veröffentlichten Medium scheitern | Bestätigung, `unconfirmed` |
+| `Could not confirm the post status` | `resolvePending` → `markUnconfirmed`: Statusprüfung ohne Ergebnis (gleicher Text seit v1.0.6) | Bestätigung, `reason: "unconfirmed"` |
+| `Could not publish after several attempts` | Schleife in `postWorkflowV112` → `markUnconfirmed`: alle Versuche aufgebraucht (seit v1.1.1) | Bestätigung, `unconfirmed` |
+| JSON mit `cause.timeoutType` | `handleActivityError` → `timeout` → `markUnconfirmed`: Zeitüberschreitung beim Veröffentlichen | Bestätigung, `unconfirmed` |
+| JSON mit `activityType: "updatePost"`, egal welche Ursache | `catch` mit `posted && !updated` → `markUnconfirmed`: Post ist raus, Speichern gescheitert | Bestätigung, `unconfirmed` |
+| JSON mit `cause.type: "refresh_token"` und `activityType` `checkPostStatus` oder `finalizePost` | `resolvePending` → `stop` → `markUnconfirmed`: Plattform hatte den Post schon angenommen | Bestätigung, `unconfirmed` |
+| `Already posted` | `postWorkflowV112`: Workflow startete, obwohl der Post nicht auf `QUEUE` stand | Bestätigung, `unconfirmed` |
+| leer, unlesbar oder unbekannt | zum Beispiel ein Fehler in `resolvePending` (`markUnconfirmed(err)` mit beliebigem Fehler) | Bestätigung, `unconfirmed` |
+
+Ändert ein Upstream-Release `markUnconfirmed`, `handleActivityError`, `changeState`, `updatePost` oder einen der Texte, kommt die Tabelle beim Sync auf den Prüfstand (`YSOCIAL-PATCHES.md`, Ablauf). Ein neuer Text fällt ohne Änderung unter „unbekannt“ und verlangt eine Bestätigung.
+
+## Testschalter für die Kanal-Prüfung (Backend, PR 19, nur Staging)
+
+Für A1: Die Kanal-Prüfung von `DailyHealth` schickt für einen Kanal 30 Minuten lang absichtlich einen ungültigen Token an die Plattform. Die Plattform antwortet mit „Zugang ungültig“. Der gespeicherte Token in Postiz bleibt unverändert.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_TEST_ROUTES` | `true` schaltet die Testrouten ein. Jeder andere Wert und eine fehlende Variable: Die Routen antworten mit 404, wie eine unbekannte Route, schon vor der Token-Prüfung. Nur auf Staging setzen |
+| `YSOCIAL_TEST_INTEGRATIONS` | IDs der Kanäle, durch Komma getrennt, für die der Schalter gilt. Nur Kanäle von Y Social |
+
+| Route | Wirkung |
+|---|---|
+| `POST /ysocial/test/integrations/:id/invalid-token` | Schalter an, 30 Minuten. Antwort `{"integrationId":"…","invalidToken":true,"until":"…"}` |
+| `DELETE /ysocial/test/integrations/:id/invalid-token` | Schalter vorzeitig aus |
+
+Beide hinter `YsocialTestRoutesGuard` und `YsocialTokenGuard`. Steht die ID nicht in `YSOCIAL_TEST_INTEGRATIONS`, kommt 403 `not_test_integration`.
+
+- Der Schalter liegt im Redis von Postiz unter `ysocial:test:invalid-token:<integrationId>` mit Ablauf nach 1800 s, keine Tabelle. Der Wert ist `{"since":"…","until":"…"}`. Die Kanal-Prüfung nimmt den ungültigen Token nur bis `until` und nie länger als 30 Minuten im Voraus, auch wenn ein Schlüssel ohne Ablauf in Redis steht. Nach 30 Minuten gilt wieder der gespeicherte Token, ohne weiteren Aufruf.
+- Die Kanal-Prüfung prüft beide Variablen selbst noch einmal. Ein Schlüssel in Redis ohne `YSOCIAL_TEST_ROUTES=true` oder für einen anderen Kanal hat keine Wirkung.
+- Statt des Tokens bekommt `analytics` den festen Wert `ysocial-test-invalid-token`. Das Log zeigt `provider call analytics … result=auth_invalid test=invalid-token`.
+- Die stündliche Kanal-Prüfung liest nur die Datenbank, der Schalter wirkt nur auf `DailyHealth`. Ablauf für A1: Schalter an, `DailyHealth` von Hand starten (oben), `channel.auth_invalid` kommt. Nach 30 Minuten oder nach `DELETE` den nächsten Lauf starten, `channel.reconnected` kommt.
+
 ## Ping von Hand (PR 16, QA 4)
 
 Im Temporal-Container von Staging oder lokal:

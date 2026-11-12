@@ -318,3 +318,131 @@ describe('DailyHealth with the real Meta providers', () => {
     expect(summary.authInvalid).toEqual([]);
   });
 });
+
+describe('DailyHealth with the test switch (PR 19)', () => {
+  const ENVS = ['YSOCIAL_TEST_ROUTES', 'YSOCIAL_TEST_INTEGRATIONS'];
+  const savedEnv = ENVS.map((name) => process.env[name]);
+  const KEY = 'ysocial:test:invalid-token:int-1';
+  // What YsocialTestSwitchService stores: the switch is on until "until".
+  const active = () =>
+    JSON.stringify({
+      since: '2026-10-27T05:50:00.000Z',
+      until: '2026-10-27T06:20:00.000Z',
+    });
+
+  beforeEach(() => {
+    process.env.YSOCIAL_TEST_ROUTES = 'true';
+    process.env.YSOCIAL_TEST_INTEGRATIONS = 'int-0, int-1';
+  });
+  afterEach(() => {
+    ENVS.forEach((name, i) =>
+      savedEnv[i] === undefined
+        ? delete process.env[name]
+        : (process.env[name] = savedEnv[i])
+    );
+  });
+
+  it('sends the invalid token and reports "Zugang ungültig"', async () => {
+    // A RefreshToken failure, as the provider throws it for a bad token.
+    const { ApplicationFailure } = jest.requireActual('@temporalio/common');
+    const analytics = jest
+      .fn()
+      .mockRejectedValue(
+        ApplicationFailure.create({ message: 'x', type: 'refresh_token' })
+      );
+    const { service, saved } = setup([row('int-1')], {
+      facebook: { analytics },
+    });
+    saved[KEY] = active();
+
+    const { events } = await service.runDailyHealth(NOW);
+
+    expect(analytics).toHaveBeenCalledWith(
+      'page-int-1',
+      'ysocial-test-invalid-token',
+      1
+    );
+    expect(events.map((e) => [e.kind, e.subject.id])).toEqual([
+      ['channel.auth_invalid', 'int-1'],
+      ['health.daily', 'postiz'],
+    ]);
+    const text = JSON.stringify(logs.mock.calls);
+    expect(text).toContain('test=invalid-token');
+    expect(text).not.toContain(TOKEN);
+  });
+
+  it('keeps the stored token without the key in the store', async () => {
+    const analytics = jest.fn().mockResolvedValue([]);
+    const { service } = setup([row('int-1')], { facebook: { analytics } });
+    await service.runDailyHealth(NOW);
+    expect(analytics).toHaveBeenCalledWith('page-int-1', TOKEN, 1);
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('test=');
+  });
+
+  it.each([
+    [
+      'YSOCIAL_TEST_ROUTES is missing',
+      () => delete process.env.YSOCIAL_TEST_ROUTES,
+    ],
+    [
+      'YSOCIAL_TEST_ROUTES is not "true"',
+      () => (process.env.YSOCIAL_TEST_ROUTES = 'false'),
+    ],
+    [
+      'the channel is not listed',
+      () => (process.env.YSOCIAL_TEST_INTEGRATIONS = 'int-0'),
+    ],
+    ['the list is missing', () => delete process.env.YSOCIAL_TEST_INTEGRATIONS],
+  ])(
+    'keeps the stored token when %s, although the key is set',
+    async (_n, change) => {
+      change();
+      const analytics = jest.fn().mockResolvedValue([]);
+      const { service, saved } = setup([row('int-1')], {
+        facebook: { analytics },
+      });
+      saved[KEY] = active();
+      await service.runDailyHealth(NOW);
+      expect(analytics).toHaveBeenCalledWith('page-int-1', TOKEN, 1);
+      expect(JSON.stringify(logs.mock.calls)).not.toContain('test=');
+    }
+  );
+
+  it('keeps the stored token when "until" is before NOW (TTL not enforced)', async () => {
+    const analytics = jest.fn().mockResolvedValue([]);
+    const { service, saved } = setup([row('int-1')], {
+      facebook: { analytics },
+    });
+    saved[KEY] = JSON.stringify({
+      since: '2026-10-27T04:50:00.000Z',
+      until: '2026-10-27T05:20:00.000Z',
+    });
+    await service.runDailyHealth(NOW);
+    expect(analytics).toHaveBeenCalledWith('page-int-1', TOKEN, 1);
+    expect(JSON.stringify(logs.mock.calls)).not.toContain('test=');
+  });
+
+  it('keeps the stored token when the stored value has no "until"', async () => {
+    const analytics = jest.fn().mockResolvedValue([]);
+    const { service, saved } = setup([row('int-1')], {
+      facebook: { analytics },
+    });
+    saved[KEY] = '1';
+    await service.runDailyHealth(NOW);
+    expect(analytics).toHaveBeenCalledWith('page-int-1', TOKEN, 1);
+  });
+
+  it('keeps the stored token when the store cannot be read', async () => {
+    const analytics = jest.fn().mockResolvedValue([]);
+    const { service } = setup([row('int-1')], { facebook: { analytics } });
+    (service as any).store = {
+      get: async () => {
+        throw new Error('redis down');
+      },
+      set: async (): Promise<unknown> => undefined,
+    };
+    const { summary } = await service.runDailyHealth(NOW);
+    expect(analytics).toHaveBeenCalledWith('page-int-1', TOKEN, 1);
+    expect(summary.platformCalls).toBe(1);
+  });
+});

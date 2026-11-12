@@ -17,6 +17,12 @@ import {
   classifyAnalyticsError,
   classifyAnalyticsResult,
 } from './channel.auth.rules';
+import {
+  invalidTokenSwitchActive,
+  invalidTokenSwitchKey,
+  isTestIntegration,
+  YSOCIAL_TEST_INVALID_TOKEN,
+} from './test.switch';
 
 // Which channels the checks reported, so they can report the way back.
 // Redis of Postiz, no table (HANDOVER §5).
@@ -48,7 +54,8 @@ export interface DailyHealthSummary {
  *
  * Only reading calls: the database and analytics of the provider for one
  * day. The token is read here and passed to analytics, it never leaves this
- * class. No token refresh, no change in Postiz.
+ * class. No token refresh, no change in Postiz. With the test switch on
+ * (test.switch.ts), analytics gets an invalid token instead.
  */
 @Injectable()
 export class YsocialChannelHealthService {
@@ -98,7 +105,7 @@ export class YsocialChannelHealthService {
         continue;
       }
 
-      const auth = await this.checkAuth(row);
+      const auth = await this.checkAuth(row, at);
       if (!auth) {
         skipped++;
         continue;
@@ -191,7 +198,8 @@ export class YsocialChannelHealthService {
 
   // The one platform call per channel. undefined: no call possible.
   private async checkAuth(
-    row: ChannelRow
+    row: ChannelRow,
+    now: number
   ): Promise<ChannelAuthResult | undefined> {
     const provider = this._integrationManager.getSocialIntegration(
       row.providerIdentifier
@@ -205,11 +213,13 @@ export class YsocialChannelHealthService {
       return undefined;
     }
 
+    const invalidToken = await this.invalidTokenSwitchOn(row.id, now);
+
     let result: ChannelAuthResult;
     try {
       const analytics = await provider.analytics(
         channel.internalId,
-        channel.token,
+        invalidToken ? YSOCIAL_TEST_INVALID_TOKEN : channel.token,
         1
       );
       result = classifyAnalyticsResult(row.providerIdentifier, analytics);
@@ -218,9 +228,27 @@ export class YsocialChannelHealthService {
     }
 
     this._logger.log(
-      `provider call analytics provider=${row.providerIdentifier} channel=${row.id} result=${result.result}`
+      `provider call analytics provider=${row.providerIdentifier} channel=${
+        row.id
+      } result=${result.result}${invalidToken ? ' test=invalid-token' : ''}`
     );
     return result;
+  }
+
+  // Test switch (PR 19): only with test routes on and only for the listed
+  // channels, whatever is in Redis.
+  private async invalidTokenSwitchOn(integrationId: string, now: number) {
+    if (!isTestIntegration(process.env, integrationId)) {
+      return false;
+    }
+    try {
+      return invalidTokenSwitchActive(
+        await this.store.get(invalidTokenSwitchKey(integrationId)),
+        now
+      );
+    } catch (err) {
+      return false;
+    }
   }
 
   private async loadProblems(): Promise<ChannelProblems> {

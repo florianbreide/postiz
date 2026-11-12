@@ -17,7 +17,10 @@ Gemeinsamer Code für die ysocial-Ordner in Backend und Orchestrator.
 - `src/health/channel.health.ts`: Kanal-Prüfung als reine Funktionen: getrennt, wieder verbunden, entfernt, Ablauf des Zugangs.
 - `src/health/channel.auth.rules.ts`: Was die Antwort von `analytics` über den Zugang sagt.
 - `src/health/ysocial.channel.health.service.ts`: stündliche Kanal-Prüfung und `DailyHealth`, Zustand in Redis.
+- `src/health/test.switch.ts`, `src/health/ysocial.test.switch.service.ts`: Testschalter für die Kanal-Prüfung (PR 19). `DailyHealth` schickt 30 Minuten lang einen ungültigen Token, nur bei `YSOCIAL_TEST_ROUTES=true` und nur für Kanäle aus `YSOCIAL_TEST_INTEGRATIONS`. Schlüssel in Redis mit Ablauf.
 - `src/read/ysocial.read.service.ts`, `src/dtos/ysocial.posts.query.dto.ts`: Lese-API für den Hub.
+- `src/retry/retry.rules.ts`: Wann „Erneut versuchen“ darf und wann der Ausgang unklar ist, als reine Funktionen. Tabelle der Fälle in `apps/orchestrator/src/ysocial/README.md`.
+- `src/retry/ysocial.retry.service.ts`, `src/database/ysocial.retry.repository.ts`, `src/dtos/ysocial.retry.dto.ts`: „Erneut versuchen“. Setzt `ERROR` → `QUEUE` und startet den Post-Workflow über `PostsService.startWorkflow` von Postiz. Ruft nie selbst einen Provider auf.
 - `jest/prisma-client.stub.js`: Ersatz für `@prisma/client` in den Tests. Der echte Client lädt beim Import eine `.env` (siehe `docs/YSOCIAL-LOKAL.md`).
 - `jest.config.js`: Jest für die ysocial-Ordner. Aufruf aus dem Repo-Root mit Node 22: `pnpm exec jest -c libraries/ysocial/jest.config.js`.
 - `upstream-check/`: Logik des Workflows `.github/workflows/ysocial-upstream-check.yml`, dazu Tests und erfundene Testdaten. Reines ESM ohne Abhängigkeiten, denn der Workflow lädt nur diesen Ordner und installiert nichts. Jest lässt die Tests aus. Aufruf aus dem Repo-Root mit Node 22: `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs`.
