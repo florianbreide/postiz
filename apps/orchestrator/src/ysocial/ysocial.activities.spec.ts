@@ -19,6 +19,7 @@ import {
   ysocialActivityNames,
 } from './ysocial.activities';
 import { createHubEvent } from '../../../../libraries/ysocial/src/events/hub.event';
+import { YsocialTokenKeyError } from '../../../../libraries/ysocial/src/tokens/token.crypto';
 
 const POSTIZ_ACTIVITIES = join(__dirname, '..', 'activities');
 
@@ -56,7 +57,12 @@ describe('ysocial activities', () => {
   });
 
   it('are registered bound to the instance', () => {
-    const instance = new YsocialActivities({} as any, {} as any, {} as any);
+    const instance = new YsocialActivities(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
     const activities = buildYsocialActivities(instance);
     expect(Object.keys(activities).sort()).toEqual(
       ysocialActivityNames().sort()
@@ -108,9 +114,12 @@ describe('ysocialDeliverEvent', () => {
   });
 
   const deliver = () =>
-    new YsocialActivities({} as any, {} as any, {} as any).ysocialDeliverEvent(
-      event
-    );
+    new YsocialActivities(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    ).ysocialDeliverEvent(event);
 
   it('delivers to the mock hub', async () => {
     expect(await deliver()).toEqual({ status: 202, duplicate: false });
@@ -163,6 +172,7 @@ describe('ysocialStartPostVerifications', () => {
     const activities = new YsocialActivities(
       verification as any,
       temporal as any,
+      {} as any,
       {} as any
     );
     return { activities, start, verification, temporal };
@@ -239,7 +249,8 @@ describe('channel checks', () => {
     const activities = new YsocialActivities(
       {} as any,
       {} as any,
-      channelHealth as any
+      channelHealth as any,
+      {} as any
     );
     expect(await activities.ysocialCheckChannels({})).toEqual({
       channels: 2,
@@ -249,5 +260,44 @@ describe('channel checks', () => {
       events: [],
       summary: { day: '2026-10-27' },
     });
+  });
+});
+
+describe('ysocialMigrateTokens', () => {
+  const build = (migrate: jest.Mock) =>
+    new YsocialActivities({} as any, {} as any, {} as any, { migrate } as any);
+  const counts = { encrypted: 2, changedMeanwhile: 0, remaining: 0 };
+
+  it('hands the batch size to the service and returns its counts', async () => {
+    const result = { token: counts, refreshToken: counts };
+    const migrate = jest.fn().mockResolvedValue(result);
+    const activities = build(migrate);
+    expect(await activities.ysocialMigrateTokens({ batchSize: 25 })).toBe(
+      result
+    );
+    expect(migrate).toHaveBeenCalledWith(25);
+    await activities.ysocialMigrateTokens();
+    expect(migrate).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('turns a key error into a non retryable failure of type YsocialTokenKey', async () => {
+    const migrate = jest
+      .fn()
+      .mockRejectedValue(new YsocialTokenKeyError('YSOCIAL_TOKEN_KEY fehlt'));
+    const error: any = await build(migrate)
+      .ysocialMigrateTokens({})
+      .catch((err) => err);
+    expect(error).toBeInstanceOf(ApplicationFailure);
+    expect(error.nonRetryable).toBe(true);
+    expect(error.type).toBe('YsocialTokenKey');
+    expect(error.message).toBe('YSOCIAL_TOKEN_KEY fehlt');
+  });
+
+  it('lets other errors through unchanged', async () => {
+    const boom = new Error('database down');
+    const error = await build(jest.fn().mockRejectedValue(boom))
+      .ysocialMigrateTokens({})
+      .catch((err) => err);
+    expect(error).toBe(boom);
   });
 });

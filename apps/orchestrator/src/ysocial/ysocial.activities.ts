@@ -22,6 +22,11 @@ import {
   DailyHealthSummary,
   YsocialChannelHealthService,
 } from '../../../../libraries/ysocial/src/health/ysocial.channel.health.service';
+import {
+  YsocialTokenMigrationResult,
+  YsocialTokenMigrationService,
+} from '../../../../libraries/ysocial/src/tokens/ysocial.token.migration.service';
+import { YsocialTokenKeyError } from '../../../../libraries/ysocial/src/tokens/token.crypto';
 import { YsocialTemporalClient } from './ysocial.temporal.client';
 
 export const verifyPostWorkflowId = (postId: string) =>
@@ -58,7 +63,8 @@ export class YsocialActivities {
   constructor(
     private _verification: YsocialPostVerificationService,
     private _temporal: YsocialTemporalClient,
-    private _channelHealth: YsocialChannelHealthService
+    private _channelHealth: YsocialChannelHealthService,
+    private _tokenMigration: YsocialTokenMigrationService
   ) {}
 
   async ysocialDeliverEvent(
@@ -165,6 +171,20 @@ export class YsocialActivities {
     _input?: Record<string, never>
   ): Promise<{ events: HubEvent[]; summary: DailyHealthSummary }> {
     return this._channelHealth.runDailyHealth();
+  }
+
+  // Encrypts plaintext channel tokens (PR 25). Only counts in the result.
+  async ysocialMigrateTokens(input?: {
+    batchSize?: number;
+  }): Promise<YsocialTokenMigrationResult> {
+    try {
+      return await this._tokenMigration.migrate(input?.batchSize);
+    } catch (err) {
+      if (err instanceof YsocialTokenKeyError) {
+        throw ApplicationFailure.nonRetryable(err.message, 'YsocialTokenKey');
+      }
+      throw err;
+    }
   }
 }
 

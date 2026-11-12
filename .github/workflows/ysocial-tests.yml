@@ -10,8 +10,13 @@
 # The secret scan runs gitleaks over the commits the fork added in the PR.
 # Upstream commits (also those a sync PR merges) are left out, see the step.
 #
-# No .env, no database, no Temporal: the tests stub @prisma/client and mock
-# Temporal. Only GITHUB_TOKEN with read access. Actions are pinned by commit SHA.
+# No .env, no Temporal: the tests stub @prisma/client and mock Temporal. The
+# one exception is the integration test of the token encryption (PR 25): it
+# runs the real Prisma client against the throwaway Postgres service below,
+# so a Prisma upgrade in an upstream sync cannot silently change how the
+# extension behaves. The service has no password (trust), only this job
+# reaches it. Only GITHUB_TOKEN with read access. Actions and images are
+# pinned by digest.
 
 name: ysocial tests
 
@@ -44,6 +49,22 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # Throwaway database for ysocial.token.integration.spec.ts, same Postgres
+    # version as staging and prod (social-hub infra).
+    services:
+      postgres:
+        image: postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994
+        env:
+          POSTGRES_USER: ysocial_it
+          POSTGRES_DB: ysocial_it
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ysocial_it -d ysocial_it"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,6 +86,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: ysocial tests (Jest)
+        env:
+          YSOCIAL_IT_DATABASE_URL: postgresql://ysocial_it@localhost:5432/ysocial_it
         run: pnpm exec jest -c libraries/ysocial/jest.config.js
 
       - name: Upstream check tests (node --test)

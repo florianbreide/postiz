@@ -4,7 +4,9 @@
 // as soon as it is imported (schemaEnvPath "../../../.env" in
 // node_modules/.prisma/client). In a worktree whose node_modules is a link to
 // the main checkout, that is the .env of the main checkout. The tests never
-// talk to a database, so they get this stub and no .env is loaded.
+// talk to a database, so they get this stub and no .env is loaded. The one
+// exception, src/tokens/ysocial.token.integration.spec.ts, loads the real
+// client itself and only runs with YSOCIAL_IT_DATABASE_URL.
 class PrismaClient {}
 
 module.exports = {

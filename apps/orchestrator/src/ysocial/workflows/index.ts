@@ -6,3 +6,4 @@ export * from './ysocial.post.verification.workflow';
 export * from './ysocial.verify.post.workflow';
 export * from './ysocial.channel.check.workflow';
 export * from './ysocial.daily.health.workflow';
+export * from './ysocial.token.migration.workflow';

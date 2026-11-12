@@ -167,6 +167,7 @@ describeIt('ysocial worker on a real Temporal server', () => {
     const activities = new YsocialActivities(
       fakeVerification as any,
       temporal,
+      {} as any,
       {} as any
     );
     service = new SourceWorkerService(activities, temporal);
