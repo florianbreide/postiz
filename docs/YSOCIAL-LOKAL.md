@@ -103,7 +103,7 @@ Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleib
 | Orchestrator | `curl http://localhost:3002/health/status` | `{"status":"ok"}` |
 | Registrierung gesperrt | `curl http://localhost:3000/auth/can-register` | `{"register":false}`, sobald ein Nutzer existiert |
 | ysocial ohne Token | `curl -i http://localhost:3000/ysocial/status` | `401` (ohne `YSOCIAL_SERVICE_TOKEN` in der `.env`: `503`) |
-| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.4.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
+| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.5.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
 | Temporal-UI | `http://localhost:8080` im Browser | Namespace `default` sichtbar |
 
 Statusroute mit Token, ohne ihn auszugeben. Nur für dich im eigenen Terminal. Claude führt das nicht aus, weil Claude die `.env` nie liest.
@@ -128,7 +128,7 @@ Die Datei hat die Rechte 600 und steht in `.git/info/exclude` (siehe „Lokale D
 
     corepack pnpm exec jest -c libraries/ysocial/jest.config.js
 
-Erwartet (Stand PR 18): 19 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Die Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+Erwartet (Stand PR 19): 24 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Die Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat oder ein Pfad `/auth` enthält. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
 
 ## ysocial-Worker lokal (ab PR 16)
 

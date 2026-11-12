@@ -1,3 +1,10 @@
+// The real PostsService pulls in half of Postiz, some of it ESM-only. The
+// retry route gets a stand-in, see ysocial.retry.controller.spec.ts.
+jest.mock(
+  '@gitroom/nestjs-libraries/database/prisma/posts/posts.service',
+  () => ({ PostsService: class PostsService {} })
+);
+
 import { randomBytes } from 'crypto';
 import { readdirSync } from 'fs';
 import { join } from 'path';
@@ -10,13 +17,18 @@ import {
 import {
   CONTROLLER_WATERMARK,
   GUARDS_METADATA,
+  PATH_METADATA,
 } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialModule } from './ysocial.module';
 import { YsocialStatusController } from './ysocial.status.controller';
 import { YsocialReadController } from './ysocial.read.controller';
+import { YsocialRetryController } from './ysocial.retry.controller';
+import { YsocialTestController } from './ysocial.test.controller';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
+import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
+import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
@@ -125,6 +137,25 @@ describe('every ysocial controller', () => {
   it('finds the controllers', () => {
     expect(controllers).toContain(YsocialStatusController);
     expect(controllers).toContain(YsocialReadController);
+    expect(controllers).toContain(YsocialRetryController);
+    expect(controllers).toContain(YsocialTestController);
+  });
+
+  // The PoliciesGuard of Postiz skips paths with /auth, so such a path would
+  // leave the controller outside its checks (.claude/CLAUDE.md).
+  it('has no path with /auth', () => {
+    const paths = controllers.flatMap((controller) => {
+      const base = Reflect.getMetadata(PATH_METADATA, controller);
+      const methods = Object.getOwnPropertyNames(controller.prototype)
+        .filter((name) => name !== 'constructor')
+        .map((name) =>
+          Reflect.getMetadata(PATH_METADATA, controller.prototype[name])
+        )
+        .filter((path) => path !== undefined);
+      return [base, ...methods].flat().map(String);
+    });
+    expect(paths.length).toBeGreaterThan(controllers.length);
+    expect(paths.filter((path) => path.includes('/auth'))).toEqual([]);
   });
 
   it.each(
@@ -142,11 +173,15 @@ describe('GET /ysocial/status', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    // The read API needs the Postiz database, the status route does not.
+    // Read API and retry need the Postiz database, the status route does not.
     const moduleRef = await Test.createTestingModule({
       imports: [YsocialModule],
     })
       .overrideProvider(YsocialReadRepository)
+      .useValue({})
+      .overrideProvider(YsocialRetryRepository)
+      .useValue({})
+      .overrideProvider(YsocialRetryService)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

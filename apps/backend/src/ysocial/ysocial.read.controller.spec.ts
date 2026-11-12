@@ -1,7 +1,16 @@
+// The real PostsService pulls in half of Postiz, some of it ESM-only. The
+// retry route gets a stand-in, see ysocial.retry.controller.spec.ts.
+jest.mock(
+  '@gitroom/nestjs-libraries/database/prisma/posts/posts.service',
+  () => ({ PostsService: class PostsService {} })
+);
+
 import { randomBytes } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { YsocialModule } from './ysocial.module';
+import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
+import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import {
   CUSTOMER_FIELDS,
   INTEGRATION_FIELDS,
@@ -99,6 +108,10 @@ describe('GET /ysocial/customers, /integrations, /posts', () => {
     })
       .overrideProvider(YsocialReadRepository)
       .useValue(repository)
+      .overrideProvider(YsocialRetryRepository)
+      .useValue({})
+      .overrideProvider(YsocialRetryService)
+      .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     // Same pipe as apps/backend/src/main.ts.
