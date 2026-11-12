@@ -160,7 +160,9 @@ Welche Kanäle gemeldet sind, merkt sich der Worker im Redis von Postiz unter `y
 
 Grenzen:
 - Meldungen aus 0.7.4 oder älter tragen kein `tokenExpiration`. Sie schließt erst der nächste Tageslauf, der den Zugang annimmt, auch wenn der Kanal vorher neu verbunden wurde. Lehnt der Tageslauf ihn weiter ab, merkt er sich `tokenExpiration`, ab dann gilt die Regel oben.
-- Ein neues Token mit unverändertem `tokenExpiration` erkennt die stündliche Prüfung nicht. Das geschieht nur, wenn beim Verbinden oder beim Refresh `expiresIn` 0, `null` oder keine Zahl ankommt. Im Code der Provider steht 0 nur in leeren `refreshToken`-Antworten, die Postiz verwirft. Provider, die `expires_in` der Plattform durchreichen, könnten aber `null` liefern. Auch dann schließt der nächste Tageslauf den Alarm, wenn die Plattform den Zugang annimmt.- Ein Token-Refresh gilt als neuer Zugang. Nimmt die Plattform auch das neue Token nicht an, meldet der nächste Tageslauf „Zugang ungültig“ mit neuem Beginn. Das gilt auch, wenn die stündliche Prüfung das neue Token sieht, bevor der laufende Tageslauf den Zustand aus Redis liest.
+- Ein neues Token mit unverändertem `tokenExpiration` erkennt die stündliche Prüfung nicht. Das geschieht nur, wenn beim Verbinden oder beim Refresh `expiresIn` als 0, `null` oder `NaN` ankommt. Fehlt `expiresIn` ganz, nimmt Postiz einen Standardwert und schreibt ein neues Datum. Im Code der Provider steht 0 nur in leeren `refreshToken`-Antworten, die Postiz verwirft. Provider, die `expires_in` der Plattform durchreichen, könnten aber `null` liefern. Auch dann schließt der nächste Tageslauf den Alarm, wenn die Plattform den Zugang annimmt.
+- Ein Token-Refresh gilt als neuer Zugang. Nimmt die Plattform auch das neue Token nicht an, meldet der nächste Tageslauf „Zugang ungültig“ mit neuem Beginn.
+- Kam das neue Token vor dem Tageslauf und sieht die stündliche Prüfung es erst, während der Tageslauf läuft, schließt sie den Alarm. Liest der Tageslauf den Zustand danach, meldet er ihn gleich wieder, wenn die Plattform auch das neue Token ablehnt. Läuft sie bei `ysocialDailyHealthWorkflowV101` zwischen Prüfen und Speichern (wenige Sekunden), bleibt der Alarm bis zum nächsten Tageslauf geschlossen.
 
 Geht der Schlüssel verloren, meldet der nächste Lauf die aktuellen Probleme noch einmal. `channel.disconnected` hat dann dieselbe Kennung, der Hub zählt es einmal. `channel.auth_invalid` bekommt einen neuen Beginn und damit eine neue Kennung, der Hub zählt es beim offenen Alarm mit.
 
@@ -180,7 +182,7 @@ Läufe von Hand (A1, PR 18 QA 3):
     temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialDailyHealthWorkflowV101 --workflow-id ysocial-daily-health-hand
     temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialChannelCheckWorkflow --workflow-id ysocial-channel-check-hand
 
-Für einen zweiten Lauf eine neue Workflow-ID nehmen, zum Beispiel mit Uhrzeit. `DailyHealth` nicht von Hand starten, solange der geplante Lauf um 07:00 noch läuft: Ändern beide denselben Kanal verschieden, gilt der Stand, der zuerst gespeichert wird, nicht der neuere, und ein Alarm kann offen bleiben.
+Für einen zweiten Lauf eine neue Workflow-ID nehmen, zum Beispiel mit Uhrzeit. `DailyHealth` nicht von Hand starten, solange der geplante Lauf um 07:00 noch läuft: Ändern beide denselben Kanal verschieden, gilt der Stand, der zuerst gespeichert wird, nicht der neuere, und ein Alarm kann offen bleiben oder fälschlich schließen.
 
 ## Verschlüsselte Kanal-Tokens (PR 25, E24)
 

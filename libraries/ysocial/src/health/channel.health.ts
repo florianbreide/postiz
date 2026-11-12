@@ -152,7 +152,8 @@ export const tokenExpiringEvent = (row: ChannelRow, now: number) => {
  * - flag gone after channel.disconnected: channel.reconnected
  * - channel.auth_invalid and a new token since (tokenExpiration changed):
  *   channel.reconnected. Other changes of the channel keep it.
- * - authInvalid (DailyHealth only): channel.auth_invalid, if not reported
+ * - authInvalid (DailyHealth only): channel.auth_invalid, if not reported.
+ *   If reported, the state takes the tokenExpiration just checked.
  * - authOk (DailyHealth only) after channel.auth_invalid: channel.reconnected
  * - reported channel no longer there: channel.removed
  */
