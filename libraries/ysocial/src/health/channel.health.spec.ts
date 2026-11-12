@@ -167,6 +167,128 @@ describe('diffChannels', () => {
     expect(next.events.map((e) => e.kind)).toEqual(['channel.reconnected']);
   });
 
+  describe('ids of "Zugang ungültig"', () => {
+    const UPDATED = NOW - DAY;
+    const invalid = (
+      previous: Parameters<typeof diffChannels>[0]['previous'],
+      now: number
+    ) =>
+      diffChannels({
+        previous,
+        channels: [channel()],
+        now,
+        authInvalid: { 'int-1': 'x' },
+      });
+    const ok = (
+      previous: Parameters<typeof diffChannels>[0]['previous'],
+      now: number
+    ) =>
+      diffChannels({
+        previous,
+        channels: [channel()],
+        now,
+        authOk: ['int-1'],
+      });
+
+    it('carries updatedAt and the run that first saw the problem', () => {
+      const first = invalid({}, NOW);
+      expect(first.events[0].id).toBe(
+        `channel.auth_invalid:int-1:${UPDATED}-${NOW}`
+      );
+      expect(first.next['int-1']).toEqual({
+        kind: 'channel.auth_invalid',
+        updatedAt: UPDATED,
+        since: new Date(NOW).toISOString(),
+      });
+    });
+
+    it('says nothing on the next daily run while the problem lasts', () => {
+      const first = invalid({}, NOW);
+      const second = invalid(first.next, NOW + DAY);
+      expect(second.events).toEqual([]);
+      expect(second.next['int-1'].since).toBe(first.next['int-1'].since);
+      expect(second.next).toEqual(first.next);
+    });
+
+    it('gives a new problem after a reconnect a new id', () => {
+      const first = invalid({}, NOW);
+      const closed = ok(first.next, NOW + DAY);
+      expect(closed.next).toEqual({});
+      const again = invalid(closed.next, NOW + 2 * DAY);
+      const closedAgain = ok(again.next, NOW + 3 * DAY);
+
+      expect(again.events[0].id).toBe(
+        `channel.auth_invalid:int-1:${UPDATED}-${NOW + 2 * DAY}`
+      );
+      expect(again.events[0].id).not.toBe(first.events[0].id);
+
+      // Each way back names the problem it closes.
+      expect(closed.events[0].id).toBe(
+        `channel.reconnected:int-1:${UPDATED}-${NOW}`
+      );
+      expect(closedAgain.events[0].id).toBe(
+        `channel.reconnected:int-1:${UPDATED}-${NOW + 2 * DAY}`
+      );
+      expect(closed.events[0].id).not.toBe(closedAgain.events[0].id);
+    });
+
+    it('reads the state 0.7.0 wrote to Redis', () => {
+      const old = {
+        'int-1': {
+          kind: 'channel.auth_invalid' as const,
+          updatedAt: UPDATED,
+          since: '2026-10-26T06:00:00.000Z',
+        },
+      };
+      expect(invalid(old, NOW).events).toEqual([]);
+      const closed = ok(old, NOW);
+      expect(closed.events[0].id).toBe(
+        `channel.reconnected:int-1:${UPDATED}-${Date.parse(
+          '2026-10-26T06:00:00.000Z'
+        )}`
+      );
+    });
+
+    it('ends the id on -0 when since is broken, without crashing', () => {
+      const broken = {
+        'int-1': {
+          kind: 'channel.auth_invalid' as const,
+          updatedAt: UPDATED,
+          since: 'not a date',
+        },
+      };
+      const closed = ok(broken, NOW);
+      expect(closed.events[0].id).toBe(
+        `channel.reconnected:int-1:${UPDATED}-0`
+      );
+    });
+
+    it('keeps the id of "getrennt" at flag and updatedAt', () => {
+      const first = diffChannels({
+        previous: {},
+        channels: [channel({ disabled: true })],
+        now: NOW,
+      });
+      expect(first.events[0].id).toBe(
+        `channel.disconnected:int-1:disabled-${UPDATED}`
+      );
+      const later = diffChannels({
+        previous: {},
+        channels: [channel({ disabled: true })],
+        now: NOW + 5 * DAY,
+      });
+      expect(later.events[0].id).toBe(first.events[0].id);
+      const closed = diffChannels({
+        previous: first.next,
+        channels: [channel({ updatedAt: new Date(NOW + 1000) })],
+        now: NOW + DAY,
+      });
+      expect(closed.events[0].id).toBe(
+        `channel.reconnected:int-1:${NOW + 1000}-${NOW}`
+      );
+    });
+  });
+
   it('reports a reported channel that was removed in Postiz', () => {
     const before = diffChannels({
       previous: {},

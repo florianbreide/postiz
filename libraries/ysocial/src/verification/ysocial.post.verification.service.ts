@@ -65,6 +65,7 @@ export class YsocialPostVerificationService {
       deleted: !!post.deletedAt,
       releaseURL: post.releaseURL || null,
       error: sanitizeReason(post.error) || null,
+      updatedAt: post.updatedAt.toISOString(),
       integration: {
         providerIdentifier: integration.providerIdentifier,
         customerId: integration.customerId || null,

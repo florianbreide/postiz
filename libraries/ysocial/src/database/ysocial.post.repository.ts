@@ -40,6 +40,7 @@ export class YsocialPostRepository {
         organizationId: true,
         integrationId: true,
         publishDate: true,
+        updatedAt: true,
         error: true,
         integration: {
           select: { providerIdentifier: true, customerId: true },
@@ -62,6 +63,7 @@ export class YsocialPostRepository {
         deletedAt: true,
         releaseURL: true,
         error: true,
+        updatedAt: true,
         integration: {
           select: {
             providerIdentifier: true,

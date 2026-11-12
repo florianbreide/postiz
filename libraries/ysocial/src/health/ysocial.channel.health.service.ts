@@ -4,6 +4,7 @@ import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YsocialIntegrationRepository } from '../database/ysocial.integration.repository';
 import { YsocialPostRepository } from '../database/ysocial.post.repository';
 import { createHubEvent, HubEvent, sanitizeReason } from '../events/hub.event';
+import { postFailedStateKey } from '../verification/post.verification';
 import {
   berlinDay,
   channelFlag,
@@ -140,7 +141,10 @@ export class YsocialChannelHealthService {
         kind: 'post.failed',
         subject: { type: 'post', id: post.id },
         // Same id as PostVerification, the hub counts it once.
-        stateKey: String(post.publishDate.getTime()),
+        stateKey: postFailedStateKey(
+          post.publishDate.toISOString(),
+          post.updatedAt.toISOString()
+        ),
         occurredAt: now,
         postiz: {
           organizationId: post.organizationId,

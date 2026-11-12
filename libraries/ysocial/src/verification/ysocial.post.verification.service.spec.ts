@@ -274,6 +274,7 @@ describe('loadSnapshot', () => {
       integrationId: 'int-1',
       state: 'ERROR',
       publishDate: new Date('2026-10-26T09:00:00.000Z'),
+      updatedAt: new Date('2026-10-26T09:00:20.000Z'),
       deletedAt: null,
       releaseURL: null,
       error:
@@ -298,6 +299,7 @@ describe('loadSnapshot', () => {
       integrationId: 'int-1',
       state: 'ERROR',
       publishDate: '2026-10-26T09:00:00.000Z',
+      updatedAt: '2026-10-26T09:00:20.000Z',
       deleted: false,
       releaseURL: null,
       error: 'request failed: https://graph.facebook.com/x?access_token=***',

@@ -3,6 +3,7 @@ import {
   initialVerificationMemory,
   nextVerificationStep,
   PlatformCheck,
+  postFailedStateKey,
   PostVerificationSnapshot,
   VerificationMemory,
   VerificationStep,
@@ -35,9 +36,17 @@ const step = (
   snapshot: PostVerificationSnapshot | null,
   now: number,
   memory: VerificationMemory = initialVerificationMemory(),
-  platform?: PlatformCheck
+  platform?: PlatformCheck,
+  failedPerAttempt?: boolean
 ) =>
-  nextVerificationStep({ postId: 'post-1', snapshot, now, memory, platform });
+  nextVerificationStep({
+    postId: 'post-1',
+    snapshot,
+    now,
+    memory,
+    platform,
+    failedPerAttempt,
+  });
 
 const kinds = (s: VerificationStep) => s.events.map((e) => e.kind);
 
@@ -294,5 +303,77 @@ describe('PostVerification rules (E22)', () => {
     const text = JSON.stringify(s.events);
     expect(text).not.toContain('EAAGsecret');
     expect(text).not.toMatch(/"content"|"token"|"settings"/);
+  });
+});
+
+describe('post.failed once per failed attempt', () => {
+  const U1 = T0 + 30_000;
+  const U2 = T0 + 20 * MIN;
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const failed = (updatedAt?: number) =>
+    post({
+      state: 'ERROR',
+      error: 'Invalid OAuth token',
+      updatedAt: updatedAt === undefined ? undefined : iso(updatedAt),
+    });
+  const perAttempt = (
+    snapshot: PostVerificationSnapshot,
+    now: number,
+    memory: VerificationMemory = initialVerificationMemory()
+  ) => step(snapshot, now, memory, undefined, true);
+
+  it('builds the key from the scheduled time and updatedAt', () => {
+    expect(postFailedStateKey(iso(T0), iso(U1))).toBe(`${T0}-${U1}`);
+    expect(postFailedStateKey(iso(T0))).toBe(`${T0}`);
+    expect(postFailedStateKey(iso(T0), undefined)).toBe(`${T0}`);
+  });
+
+  it('reports the first ERROR with scheduled time and updatedAt in the id', () => {
+    const s = perAttempt(failed(U1), T0 + MIN);
+    expect(kinds(s)).toEqual(['post.failed']);
+    expect(s.events[0].id).toBe(`post.failed:post-1:${T0}-${U1}`);
+    expect(s.memory.failedUpdatedAt).toBe(iso(U1));
+  });
+
+  it('says nothing at a later look with the same updatedAt', () => {
+    const first = perAttempt(failed(U1), T0 + MIN);
+    const again = perAttempt(failed(U1), first.nextCheckAt!, first.memory);
+    expect(again.events).toEqual([]);
+    expect(again.done).toBe(false);
+  });
+
+  it('reports a failed retry as a new failure, once', () => {
+    const first = perAttempt(failed(U1), T0 + MIN);
+    // "Erneut versuchen": back in the queue, nothing to report.
+    const queued = perAttempt(
+      post({ state: 'QUEUE', updatedAt: iso(U1 + MIN) }),
+      T0 + 10 * MIN,
+      first.memory
+    );
+    expect(queued.events).toEqual([]);
+    expect(queued.memory.problem).toBe('post.failed');
+
+    const second = perAttempt(failed(U2), T0 + 21 * MIN, queued.memory);
+    expect(kinds(second)).toEqual(['post.failed']);
+    expect(second.events[0].id).toBe(`post.failed:post-1:${T0}-${U2}`);
+    expect(second.events[0].id).not.toBe(first.events[0].id);
+
+    const quiet = perAttempt(failed(U2), second.nextCheckAt!, second.memory);
+    expect(quiet.events).toEqual([]);
+  });
+
+  it('falls back to the scheduled time without updatedAt and does not repeat', () => {
+    const first = perAttempt(failed(), T0 + MIN);
+    expect(first.events[0].id).toBe(`post.failed:post-1:${T0}`);
+    const again = perAttempt(failed(), first.nextCheckAt!, first.memory);
+    expect(again.events).toEqual([]);
+  });
+
+  it('keeps the old ids without the option (replay of the old workflow)', () => {
+    const first = step(failed(U1), T0 + MIN);
+    expect(first.events[0].id).toBe(`post.failed:post-1:${T0}`);
+    const queued = step(post(), T0 + 10 * MIN, first.memory);
+    const second = step(failed(U2), T0 + 21 * MIN, queued.memory);
+    expect(second.events).toEqual([]);
   });
 });

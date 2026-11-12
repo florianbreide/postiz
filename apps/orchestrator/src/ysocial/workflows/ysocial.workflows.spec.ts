@@ -74,6 +74,7 @@ describe('ysocial workflows', () => {
         'ysocialDeliverEventWorkflow',
         'ysocialPostVerificationWorkflow',
         'ysocialVerifyPostWorkflow',
+        'ysocialVerifyPostWorkflowV101',
         'ysocialChannelCheckWorkflow',
         'ysocialDailyHealthWorkflow',
         'ysocialTokenMigrationWorkflow',
@@ -82,7 +83,7 @@ describe('ysocial workflows', () => {
     const postiz = postizWorkflowNames();
     expect(postiz).toContain('missingPostWorkflow');
     for (const name of names) {
-      expect(name).toMatch(/^ysocial[A-Z]\w*Workflow$/);
+      expect(name).toMatch(/^ysocial[A-Z]\w*Workflow(V\d+)?$/);
       expect(postiz).not.toContain(name);
     }
   });

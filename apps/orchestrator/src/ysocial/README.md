@@ -73,31 +73,35 @@ Arten in diesem Stand:
 | Art | Gegenstand | Wann | Kennung |
 |---|---|---|---|
 | `ping` | `system` | Testereignis, von Hand | `ping:ysocial-worker:<Workflow-ID>` |
-| `post.failed` | `post` | Postiz setzt `ERROR`. Grund: Fehlertext von Postiz, bereinigt | `post.failed:<postId>:<Termin in ms>` |
+| `post.failed` | `post` | Postiz setzt `ERROR`. Grund: Fehlertext von Postiz, bereinigt. Scheitert ein neuer Versuch (zum Beispiel nach „Erneut versuchen“), kommt es noch einmal | `post.failed:<postId>:<Termin in ms>-<updatedAt des Posts in ms>` |
 | `post.not_published` | `post` | 3 Minuten nach dem Termin noch `QUEUE` | `post.not_published:<postId>:<Termin>` |
 | `post.not_found` | `post` | `PUBLISHED`, aber 4 Minuten nach dem Termin auf der Plattform nicht auffindbar | `post.not_found:<postId>:<Termin>` |
 | `post.verified` | `post` | Auf der Plattform gefunden. `data.releaseURL` ist der Link | `post.verified:<postId>:<Termin>` |
 | `post.unverifiable` | `post` | Veröffentlicht, aber nicht prüfbar. Kein Alarm | `post.unverifiable:<postId>:<Termin>` |
 | `post.resolved` | `post` | Ein gemeldeter Post wurde gelöscht, ist wieder Entwurf oder hat einen neuen Termin. `data.resolution`: `deleted`, `draft`, `rescheduled` | `post.resolved:<postId>:<Termin>` |
 | `channel.disconnected` | `channel` | In Postiz ist `refreshNeeded`, `inBetweenSteps` oder `disabled` gesetzt. `data.flag`: `refresh_needed`, `in_between_steps`, `disabled` | `channel.disconnected:<integrationId>:<flag>-<updatedAt in ms>` |
-| `channel.auth_invalid` | `channel` | `DailyHealth`: Die Plattform lehnt den gespeicherten Zugang ab („Zugang ungültig“) | `channel.auth_invalid:<integrationId>:<updatedAt>` |
-| `channel.reconnected` | `channel` | Ein gemeldeter Kanal ist wieder in Ordnung. `data.previous`: die frühere Art | `channel.reconnected:<integrationId>:<updatedAt>` |
+| `channel.auth_invalid` | `channel` | `DailyHealth`: Die Plattform lehnt den gespeicherten Zugang ab („Zugang ungültig“) | `channel.auth_invalid:<integrationId>:<updatedAt in ms>-<Beginn in ms>` |
+| `channel.reconnected` | `channel` | Ein gemeldeter Kanal ist wieder in Ordnung. `data.previous`: die frühere Art | `channel.reconnected:<integrationId>:<updatedAt in ms>-<Beginn der früheren Meldung in ms>` |
 | `channel.removed` | `channel` | Ein gemeldeter Kanal wurde in Postiz entfernt | `channel.removed:<integrationId>:<updatedAt beim Melden>` |
 | `channel.token_expiring` | `channel` | `DailyHealth`: Der Zugang läuft in höchstens 7 Tagen ab oder ist abgelaufen. `data.expiresAt`, `data.expired` | `channel.token_expiring:<integrationId>:<Ablauf in ms>` |
 | `health.daily` | `system` (`postiz`) | Sammelereignis von `DailyHealth`, Inhalt unten | `health.daily:postiz:<Tag in Berlin>` |
 
-`post.verified`, `post.unverifiable` und `post.resolved` schließen offene Alarme desselben Posts, `channel.reconnected` und `channel.removed` die des Kanals. Meldet derselbe Prüflauf eine Art ein zweites Mal, hängt an der Kennung `-2`, `-3` und so weiter. Bei Post-Ereignissen steht in `data` immer `publishDate` und `state`.
+`post.verified`, `post.unverifiable` und `post.resolved` schließen offene Alarme desselben Posts, `channel.reconnected` und `channel.removed` die des Kanals. Meldet derselbe Prüflauf eine Art ein zweites Mal, hängt an der Kennung `-2`, `-3` und so weiter, außer bei `post.failed`. Bei Post-Ereignissen steht in `data` immer `publishDate` und `state`.
+
+Kennungen ab 0.7.1:
+- `post.failed`: Jeder Schreibzugriff von Postiz ändert `updatedAt` des Posts, auch ein neuer Versuch, der wieder scheitert. `PostVerification` und `DailyHealth` bilden die Kennung gleich (`postFailedStateKey` in `libraries/ysocial/src/verification/post.verification.ts`). Solange der Post unverändert auf `ERROR` steht, bleibt sie gleich. Ändert jemand einen Post auf `ERROR`, ohne ihn neu zu versuchen, kommt `post.failed` mit neuer Kennung, der Hub zählt es beim offenen Alarm mit.
+- `channel.auth_invalid`: „Zugang ungültig“ ändert den Kanal in Postiz nicht, `updatedAt` bleibt. „Beginn“ ist der Lauf, der den Vorfall zuerst sieht (`since` in `ysocial:channel-problems`, siehe unten). Er bleibt, solange der Vorfall dauert. Ein neuer Vorfall nach `channel.reconnected` bekommt einen neuen Beginn. `channel.reconnected` trägt den Beginn der Meldung, die es schließt.
 
 Zustellung: Jedes Ereignis bekommt einen eigenen Workflow `ysocial-event-<id>`. Die Aktivität `ysocialDeliverEvent` wiederholt ab 10 s mit doppelter Pause bis 15 Minuten, insgesamt bis 24 Stunden. Jede Wiederholung sendet dasselbe Ereignis mit derselben Kennung. Der Hub soll mit 202 antworten, auch für eine Kennung, die er schon kennt. 409 gilt ebenfalls als zugestellt. 400, 404, 405, 410, 413, 415 und 422 beenden die Zustellung, alle anderen Antworten und Netzfehler werden wiederholt. Ein zugestelltes Ereignis stellt Temporal kein zweites Mal zu. Eine gescheiterte Zustellung darf neu starten.
 
 ## PostVerification (PR 17, E22)
 
 - Schedule `ysocial-post-verification` startet jede Minute `ysocialPostVerificationWorkflow`. Die Aktivität liest alle Posts mit Termin in den letzten 60 Minuten: nur der erste Post eines Threads, ohne Entwürfe, ohne gelöschte. Für jeden startet sie `ysocial-verify-<postId>`. Temporal lehnt eine zweite Prüfung desselben Posts ab, solange es den Lauf aufbewahrt. Eine eigene Tabelle gibt es nicht.
-- `ysocialVerifyPostWorkflow` liest den Post jede Minute und entscheidet nach `libraries/ysocial/src/verification/post.verification.ts`:
+- `ysocialVerifyPostWorkflowV101` (ab 0.7.1) liest den Post jede Minute und entscheidet nach `libraries/ysocial/src/verification/post.verification.ts`. `ysocialVerifyPostWorkflow` bleibt unverändert für Läufe, die vorher gestartet wurden. Er meldet `post.failed` je Lauf nur einmal, mit der Kennung `post.failed:<postId>:<Termin in ms>`:
 
 | Zustand | Ergebnis |
 |---|---|
-| `ERROR` | sofort `post.failed` |
+| `ERROR` | sofort `post.failed`. Steht der Post bei einer Nachschau mit anderem `updatedAt` auf `ERROR`, wieder `post.failed` mit neuer Kennung |
 | `QUEUE` ab Termin + 3 min | `post.not_published` |
 | `PUBLISHED` | Prüfung auf der Plattform: gefunden `post.verified`, nicht prüfbar `post.unverifiable`, nicht gefunden ab Termin + 4 min `post.not_found` |
 | gelöscht, Entwurf, neuer Termin | ohne Meldung vorher nichts, sonst `post.resolved` |
@@ -144,7 +148,7 @@ Was die Antwort von `analytics` heißt (`libraries/ysocial/src/health/channel.au
 | jeder andere Fehler, etwa ein Limit | unklar, kein Alarm, im Sammelereignis unter `unclear` |
 | sonst | in Ordnung |
 
-Welche Kanäle gemeldet sind, merkt sich der Worker im Redis von Postiz unter `ysocial:channel-problems`, keine Tabelle. So kann er „wieder verbunden“ melden. „Zugang ungültig“ gilt als gelöst, wenn sich der Kanal danach ändert (neu verbunden) oder der nächste Tageslauf in Ordnung ist. Geht der Schlüssel verloren, meldet der nächste Lauf die aktuellen Probleme mit denselben Kennungen noch einmal, der Hub zählt sie einmal.
+Welche Kanäle gemeldet sind, merkt sich der Worker im Redis von Postiz unter `ysocial:channel-problems`, keine Tabelle. So kann er „wieder verbunden“ melden. „Zugang ungültig“ gilt als gelöst, wenn sich der Kanal danach ändert (neu verbunden) oder der nächste Tageslauf in Ordnung ist. Geht der Schlüssel verloren, meldet der nächste Lauf die aktuellen Probleme noch einmal. `channel.disconnected` hat dann dieselbe Kennung, der Hub zählt es einmal. `channel.auth_invalid` bekommt einen neuen Beginn und damit eine neue Kennung, der Hub zählt es beim offenen Alarm mit.
 
 Im Log steht je Plattformaufruf `provider call analytics provider=<id> channel=<integrationId> result=<ok|auth_invalid|unclear>` und je Tageslauf `daily health: channels=<n> platform calls=<n> skipped=<n>`.
 
@@ -230,7 +234,7 @@ Für die Oberfläche (PR 23):
 - Eine Bestätigung bei `reason: "published"` sendet den ganzen Post noch einmal, bei einem Thread auch den ersten Post.
 - Bei einem wiederholten Post (`intervalInDays`), dessen Termin mehr als 2 Stunden zurückliegt, legt Postiz den Termin auf die nächste Wiederholung (`reanchorInterval` in `apps/orchestrator/src/activities/post.activity.ts`). „Erneut versuchen“ postet dann nicht sofort.
 - Der alte Fehlertext bleibt bei `QUEUE` im Feld `error` stehen, die Lese-API zeigt ihn weiter.
-- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE`. Fällt eine Nachschau in diese Zeit, meldet er `post.not_published`, `post.verified` schließt den Alarm danach.
+- Nach einem Retry sieht ein laufender `ysocial-verify-<postId>` den Post kurz auf `QUEUE` und meldet dabei nichts, `post.failed` ist schon gemeldet. Geht der Post raus, schließt `post.verified` den Alarm. Scheitert er wieder, kommt `post.failed` mit neuer Kennung. Nach den 24 Stunden der Nachschau meldet nur noch `DailyHealth` am nächsten Morgen.
 
 ### Unklarer Ausgang
 
@@ -383,5 +387,5 @@ Ergebnis: `{"eventId":"ping:ysocial-worker:ysocial-ping-qa","delivery":"started"
 - Alle: `pnpm exec jest -c libraries/ysocial/jest.config.js` (Node 22).
 - Gegen echtes Prisma und Postgres, sonst übersprungen: `YSOCIAL_IT_DATABASE_URL=… pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.token.integration`, siehe `docs/YSOCIAL-LOKAL.md`. In GitHub läuft er bei jedem PR.
 - Gegen einen echten Temporal-Server, sonst übersprungen: `YSOCIAL_IT_TEMPORAL_ADDRESS=127.0.0.1:7233 pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.worker.integration`. Der Namespace `ysocial` muss existieren (`temporal operator namespace create --namespace ysocial`). Der Test startet den echten Worker, einen Mock-Hub, der beim ersten Versuch 503 antwortet, einen Ping und eine PostVerification mit zwei erfundenen Posts aus einem gestellten Dienst, ohne Datenbank. Er legt den Schedule an und löscht ihn am Ende wieder.
-- Zeitraffer für PostVerification: `ysocial.verify.post.workflow.spec.ts`. `sleep` stellt dort die Uhr vor, statt zu warten.
+- Zeitraffer für PostVerification: `ysocial.verify.post.workflow.spec.ts` und für die neue Version `ysocial.verify.post.workflow.v1.0.1.spec.ts`. `sleep` stellt dort die Uhr vor, statt zu warten.
 - Der Bundler von Temporal liest beim Test die TypeScript-Quellen. Die `.swcrc` von Postiz in `apps/orchestrator/` hat einen `baseUrl` von einem fremden Rechner, der Test schaltet sie für den Bundler ab. Im Betrieb bündelt der Worker das kompilierte JavaScript aus `dist`, dort spielt die Datei keine Rolle.

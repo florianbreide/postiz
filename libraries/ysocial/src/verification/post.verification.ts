@@ -43,6 +43,8 @@ export interface PostVerificationSnapshot {
   releaseURL: string | null;
   // Error text of Postiz, already sanitized.
   error: string | null;
+  // Every write of Postiz changes it, so a new failed attempt does too.
+  updatedAt?: string;
   integration: {
     providerIdentifier: string;
     customerId: string | null;
@@ -66,6 +68,8 @@ export interface VerificationMemory {
   // Scheduled time the memory belongs to. A new time starts a new check.
   publishDate?: string;
   problem?: ProblemKind;
+  // updatedAt of the post when post.failed was reported.
+  failedUpdatedAt?: string;
   followUps: number;
   // How often each kind was reported for this scheduled time, for the ids.
   counts: Partial<Record<HubEventKind, number>>;
@@ -92,6 +96,14 @@ export const initialVerificationMemory = (): VerificationMemory => ({
   counts: {},
 });
 
+// State key of post.failed, one per failed attempt: "Erneut versuchen" keeps
+// the scheduled time, updatedAt changes. DailyHealth uses the same key, so
+// the hub counts each failure once.
+export const postFailedStateKey = (publishDate: string, updatedAt?: string) =>
+  updatedAt
+    ? `${Date.parse(publishDate)}-${Date.parse(updatedAt)}`
+    : `${Date.parse(publishDate)}`;
+
 const REASONS = {
   notPublished: 'Der Post steht 3 Minuten nach dem Termin noch auf „geplant“.',
   disconnected: 'Der Kanal ist getrennt oder muss neu verbunden werden.',
@@ -112,7 +124,8 @@ const postEvent = (
   memory: VerificationMemory,
   now: number,
   reason: string,
-  data: Record<string, HubEventValue> = {}
+  data: Record<string, HubEventValue> = {},
+  stateKey?: string
 ): { event: HubEvent; memory: VerificationMemory } => {
   const count = (memory.counts[kind] || 0) + 1;
   const publishMs = publishDate ? Date.parse(publishDate) : 0;
@@ -120,7 +133,8 @@ const postEvent = (
     event: createHubEvent({
       kind,
       subject: { type: 'post', id: postId },
-      stateKey: count > 1 ? `${publishMs}-${count}` : `${publishMs}`,
+      stateKey:
+        stateKey ?? (count > 1 ? `${publishMs}-${count}` : `${publishMs}`),
       occurredAt: new Date(now),
       postiz: snapshot
         ? {
@@ -230,7 +244,8 @@ const report = (
   snapshot: PostVerificationSnapshot,
   memory: VerificationMemory,
   now: number,
-  reason: string
+  reason: string,
+  stateKey?: string
 ) => {
   const { event, memory: next } = postEvent(
     kind,
@@ -239,7 +254,9 @@ const report = (
     snapshot.publishDate,
     memory,
     now,
-    reason
+    reason,
+    {},
+    stateKey
   );
   return {
     events: [event],
@@ -253,8 +270,12 @@ export const nextVerificationStep = (input: {
   platform?: PlatformCheck;
   now: number;
   memory: VerificationMemory;
+  // ysocialVerifyPostWorkflowV101: post.failed once per failed attempt, id
+  // from postFailedStateKey. ysocialVerifyPostWorkflow passes nothing and
+  // keeps its ids, so its running workflows replay unchanged.
+  failedPerAttempt?: boolean;
 }): VerificationStep => {
-  const { postId, snapshot, platform, now } = input;
+  const { postId, snapshot, platform, now, failedPerAttempt } = input;
   let memory: VerificationMemory = {
     ...input.memory,
     firstSeen: input.memory.firstSeen ?? now,
@@ -292,7 +313,10 @@ export const nextVerificationStep = (input: {
   }
 
   if (snapshot.state === 'ERROR') {
-    if (memory.problem === 'post.failed') {
+    // After "Erneut versuchen" a failed attempt is a new failure.
+    const sameFailure =
+      !failedPerAttempt || memory.failedUpdatedAt === snapshot.updatedAt;
+    if (memory.problem === 'post.failed' && sameFailure) {
       return followUp([], memory, now);
     }
     const reason = snapshot.error
@@ -304,9 +328,16 @@ export const nextVerificationStep = (input: {
       snapshot,
       memory,
       now,
-      reason
+      reason,
+      failedPerAttempt
+        ? postFailedStateKey(snapshot.publishDate, snapshot.updatedAt)
+        : undefined
     );
-    return followUp(reported.events, reported.memory, now);
+    return followUp(
+      reported.events,
+      { ...reported.memory, failedUpdatedAt: snapshot.updatedAt },
+      now
+    );
   }
 
   if (snapshot.state === 'QUEUE') {
