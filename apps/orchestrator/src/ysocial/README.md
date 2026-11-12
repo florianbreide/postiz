@@ -278,6 +278,90 @@ Beide hinter `YsocialTestRoutesGuard` und `YsocialTokenGuard`. Steht die ID nich
 - Statt des Tokens bekommt `analytics` den festen Wert `ysocial-test-invalid-token`. Das Log zeigt `provider call analytics … result=auth_invalid test=invalid-token`.
 - Die stündliche Kanal-Prüfung liest nur die Datenbank, der Schalter wirkt nur auf `DailyHealth`. Ablauf für A1: Schalter an, `DailyHealth` von Hand starten (oben), `channel.auth_invalid` kommt. Nach 30 Minuten oder nach `DELETE` den nächsten Lauf starten, `channel.reconnected` kommt.
 
+## Inbox-Demo (Backend, PR 26, nur Staging)
+
+Für die Meta-Screencasts (E25, W15, `docs/plattformen/meta.md` im Hub): Kommentare der letzten Instagram-Beiträge lesen, als Konto antworten, verbergen, löschen. Die Demo-Seite im Hub (PR 27) ruft diese Routen. Gespeichert wird nichts, es gibt keine Tabelle. Tickets und Ereignisse `inbox.*` an den Hub kommen später im Hub.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_DEMO_INTEGRATIONS` | IDs der Kanäle, durch Komma getrennt, nur Y-Social-Kanäle auf Staging. Fehlt sie oder ist sie leer, antworten alle Inbox-Routen mit 404 wie eine unbekannte Route, schon vor der Token-Prüfung. Auf Prod nie setzen |
+
+| Route | Wirkung |
+|---|---|
+| `GET /ysocial/inbox/integrations/:id/comments` | Die letzten 10 Beiträge des Kontos, je bis zu 50 Kommentare (neueste zuerst) mit ihren Antworten |
+| `POST /ysocial/inbox/integrations/:id/comments/:commentId/replies` | Antwort als Konto, Body `{"message": "…"}`. 201 `{"integrationId":"…","commentId":"…","replyId":"…"}` |
+| `POST /ysocial/inbox/integrations/:id/comments/:commentId/hide` | `{"hide": true}` verbirgt, `{"hide": false}` zeigt wieder. 200 `{…,"hidden":true}` |
+| `DELETE /ysocial/inbox/integrations/:id/comments/:commentId` | Löscht, nur mit Body `{"confirmDelete": true}`. 200 `{…,"deleted":true}` |
+
+Alle hinter `YsocialInboxDemoGuard` und `YsocialTokenGuard`. Die drei schreibenden Routen verlangen `X-Ysocial-Actor` mit denselben Regeln wie „Erneut versuchen“.
+
+Antwort der Leseroute:
+
+    {
+      "integrationId": "…",
+      "provider": "instagram",
+      "fetchedAt": "2026-11-12T09:00:00.000Z",
+      "posts": [{
+        "id": "…", "permalink": "https://www.instagram.com/p/…", "timestamp": "…", "mediaType": "IMAGE", "commentsCount": 2,
+        "comments": [{ "id": "…", "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "replies": [] }]
+      }]
+    }
+
+Ohne Bildunterschrift (`caption`): Posttext ist eine eigene Entscheidung wie bei der Lese-API. `commentsCount` kommt von Meta, zählt Antworten mit und kann größer sein als die Liste.
+
+**Regeln**
+- Jede Route prüft selbst, ob der Kanal in `YSOCIAL_DEMO_INTEGRATIONS` steht (Regel 9). Der Guard entscheidet nur, ob es die Routen gibt.
+- Geschrieben wird nur auf einen Aufruf über die Route (Regel 2). Kein Workflow, kein Schedule, keine automatische Antwort. Der Hub prüft die Rolle der Person und schickt sie im Kopf mit.
+- Vor jeder schreibenden Aktion prüft die Route an der Plattform, ob der Kommentar unter einem Beitrag dieses Kontos steht: Feld `media` des Kommentars (bei einer Antwort ohne `media` über `parent_id` der Kommentar darüber), dann `owner` des Beitrags gleich `internalId` des Kanals. Sonst 404 `comment_not_found`, und nichts ändert sich.
+- Löschen ohne `"confirmDelete": true` ergibt 409 `confirmation_required`, ohne Plattformaufruf.
+- Token: der Page-Token aus `Integration.token` (`<Page-Token>___<User-Token>`), wie `comment()` und `analytics()` des Postiz-Providers. Er steht nur in der Anfrage an Meta (Adresse bei `GET` und `DELETE`, Body bei `POST`), nie in Log oder Antwort. Der Antworttext geht im Body an Meta, nicht in der Adresse.
+
+| Antwort | `code` | Wann |
+|---|---|---|
+| 404 | – | `YSOCIAL_DEMO_INTEGRATIONS` fehlt oder ist leer |
+| 401, 503 | – | Service-Token falsch oder nicht konfiguriert, wie `/ysocial/status` |
+| 400 | `actor_missing` | Schreibende Route ohne gültigen `X-Ysocial-Actor` |
+| 400 | – | Body ungültig: `message` fehlt, ist leer oder länger als 2200 Zeichen, `hide` oder `confirmDelete` ist kein Boolean |
+| 400 | `invalid_comment_id` | `commentId` besteht nicht nur aus Ziffern und `_` |
+| 403 | `not_demo_integration` | Kanal steht nicht in der Liste |
+| 404 | `not_found` | Kanal unbekannt |
+| 404 | `comment_not_found` | Kommentar steht nicht unter einem Beitrag dieses Kontos, Meta kennt ihn nicht (Code 100, Subcode 33, etwa direkt nach dem Löschen) oder die ID hat ein `_` (Instagram-IDs bestehen nur aus Ziffern) |
+| 409 | `confirmation_required` | Löschen ohne Bestätigung |
+| 409 | `channel_inactive` | Kanal gelöscht, `disabled`, `refreshNeeded` oder `inBetweenSteps`, steht in `flag` |
+| 409 | `provider_not_supported` | Kanal ohne Inbox, steht in `provider`. Zurzeit nur `instagram` |
+| 502 | `platform_error` | Meta lehnt ab (beim Schreiben nur Antworten unter 500): `platformStatus`, `platformCode`, `platformSubcode` und `reason`, die Meldung von Meta, bereinigt wie `reason` bei Ereignissen |
+| 500 | `internal_error` | Unerwarteter Fehler, etwa Datenbank oder Entschlüsselung des Tokens. Im Log nur der Name der Fehlerklasse, bei Prisma dazu der Code (`P1001` und so weiter). Als `HttpException` geht er nicht an den Sentry-Filter von Postiz, der den Body der Anfrage (den Antworttext) mitschicken würde |
+| 503 | `platform_unavailable` | Meta beim Lesen oder bei der Prüfung vor dem Schreiben nicht erreichbar oder keine Antwort nach 15 s. Nichts geändert |
+| 503 | `outcome_unknown` | Keine klare Antwort von Meta auf das Schreiben selbst: Netzfehler, 15 s ohne Antwort oder ein Fehler 5xx von Meta (im Log dann mit Status und Codes). Meta hat es vielleicht trotzdem getan. Der Hub wiederholt den Aufruf nicht von selbst, sondern lädt die Kommentare neu und zeigt den Stand |
+
+Dauer: Jede Anfrage an Meta bricht nach 15 s ab. Lesen braucht 1 Anfrage für die Beiträge und bis zu 10 parallel für die Kommentare, also höchstens etwa 30 s. Schreiben macht bis zu 4 Anfragen nacheinander (Kommentar, Kommentar darüber, Beitrag, Schreiben), also höchstens etwa 60 s. Der Hub wartet mindestens so lange. Bricht er vorher ab, läuft das Schreiben im Fork trotzdem weiter.
+
+Im Log steht je Aufruf nur, was eine Prüfung bestanden hat, die Person und Zahlen: `inbox comments channel=<id> result=ok posts=<n> comments=<n>` und `inbox <reply|hide|unhide|delete> channel=<id> comment=<commentId> actor=<X-Ysocial-Actor> result=<done|rejected code=…>`. Bei `platform_error` stehen dort Status und Codes von Meta, nie ihre Meldung. Kommentartext, Namen der Kommentierenden und Antworttext stehen nie im Log. Eine Kanal-ID, die nicht in der Liste steht, und eine ungültige Kommentar-ID stehen dort als `-`.
+
+**Endpunkte und Rechte** laut offizieller Meta-Referenz (Instagram API with Facebook Login, gelesen am 12.11.2026, Links im Kopf von `libraries/ysocial/src/inbox/instagram.inbox.ts`):
+
+| Aufruf | Rechte |
+|---|---|
+| `GET /{ig-user-id}/media` | `instagram_basic`, `pages_read_engagement` oder `pages_show_list` |
+| `GET /{ig-media-id}/comments` mit Feld `replies` | `instagram_basic`, `instagram_manage_comments`, `pages_read_engagement` |
+| `GET /{ig-comment-id}`, `GET /{ig-media-id}` (Prüfung vor dem Schreiben) | `instagram_basic`, `instagram_manage_comments`, `pages_read_engagement` |
+| `POST /{ig-comment-id}/replies` | `instagram_basic`, `instagram_manage_comments`, `pages_show_list`, `pages_read_engagement` |
+| `POST /{ig-comment-id}` mit `hide`, `DELETE /{ig-comment-id}` | `instagram_basic`, `instagram_manage_comments`, `pages_read_engagement`. Nur der Besitzer des Beitrags |
+
+Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.provider.ts`, `scopes`), es braucht keinen Patch.
+
+**Grenzen laut Meta**
+- Antworten nur auf Kommentare der obersten Ebene. Eine Antwort auf eine Antwort hängt Meta an den Kommentar darüber. Keine Antwort auf verborgene Kommentare und unter Live-Videos.
+- Kommentare des Kontos selbst bleiben sichtbar, auch wenn sie verborgen sind.
+- Höchstens 50 Kommentare je Beitrag und Abruf, die Demo blättert nicht weiter. Ob verborgene Kommentare in der Liste stehen, sagt die Doku nicht (**ungeprüft**, auf Staging prüfen).
+- Ob eine Antwort das Feld `media` trägt, sagt die Doku nicht. Deshalb der Weg über `parent_id`.
+- `owner` gibt Meta nur zurück, wenn „the app user making the query also created the media“. Ob das mit dem Page-Token gilt, ist **ungeprüft**. Gilt es nicht, enden alle schreibenden Aufrufe mit 404 `comment_not_found`, ohne etwas zu ändern (fail-closed). PLAN QA 2 auf Staging zeigt es.
+- Je Kommentar liest die Demo nur die erste Seite der Antworten in der Standardgröße von Meta.
+- Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
+- Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
+
+**Facebook** fehlt mit Absicht. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Der Postiz-Provider `facebook` fragt es nicht an (W10). `facebook.inbox.ts` kommt erst, wenn das Recht da ist: als Patch 4 nur mit Florians Zustimmung (E25), sonst in Phase 3.
+
 ## Ping von Hand (PR 16, QA 4)
 
 Im Temporal-Container von Staging oder lokal:
