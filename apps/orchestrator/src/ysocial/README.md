@@ -134,6 +134,7 @@ Höchstens 7 Tage. Posts, die schon geprüft wurden, prüft er nicht noch einmal
 
 - Felder wie bei der Kanal-Prüfung, dazu der Ablauf des Zugangs: `channel.token_expiring` ab 7 Tagen vorher.
 - Genau ein lesender Plattformaufruf über die Provider-Methode `analytics` für einen Tag. Kanäle mit gesetztem Feld oder abgelaufenem Zugang und Provider ohne `analytics` bekommen keinen Aufruf. Bei Instagram macht die Provider-Methode intern zwei Anfragen an die Graph API.
+- Die Plattformaufrufe laufen nacheinander und können bis zu 20 Minuten dauern. Ab 0.7.4 liest `DailyHealth` die Kanäle danach neu aus der Datenbank. Erst dann vergleicht es mit dem Zustand in Redis und bildet die Ablaufhinweise. So meldet es kein falsches `channel.reconnected` für einen Kanal, den die stündliche Prüfung in der Zwischenzeit als getrennt gemeldet hat. Hat sich ein Kanal seit dem Lesen geändert (anderes `updatedAt`, etwa neu verbunden oder Token erneuert), zählt sein Plattformergebnis nicht, denn es gehört zum alten Stand. Der Kanal wird dann nur nach seinen Feldern beurteilt wie bei der stündlichen Prüfung, und der nächste Tageslauf prüft ihn wieder.
 - Posts im Zustand `ERROR` der letzten 7 Tage, je Post `post.failed` mit derselben Kennung wie in `PostVerification`.
 - Zum Schluss `health.daily` mit `data`: `day`, `channels`, `platformCalls`, `skipped`, `disconnected`, `authInvalid`, `tokenExpiring`, `unclear`, `failedPosts` (Listen mit IDs).
 - Inbox-Abrufe prüft `DailyHealth` erst ab Phase 3 (W33).

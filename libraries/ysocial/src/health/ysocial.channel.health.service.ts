@@ -15,6 +15,7 @@ import {
   diffChannels,
   problemChanges,
   tokenExpiringEvent,
+  tokenExpiry,
 } from './channel.health';
 import {
   ChannelAuthResult,
@@ -137,18 +138,12 @@ export class YsocialChannelHealthService {
     const authInvalid: Record<string, string> = {};
     const authOk: string[] = [];
     const unclear: string[] = [];
-    const tokenEvents: HubEvent[] = [];
     let platformCalls = 0;
     let skipped = 0;
 
     for (const row of channels) {
-      const expiring = tokenExpiringEvent(row, at);
-      if (expiring) {
-        tokenEvents.push(expiring);
-      }
-
       // A disconnected channel or an expired token would only fail.
-      if (channelFlag(row) || expiring?.data?.expired) {
+      if (channelFlag(row) || tokenExpiry(row, at)?.expired) {
         skipped++;
         continue;
       }
@@ -168,17 +163,37 @@ export class YsocialChannelHealthService {
       }
     }
 
+    // The platform calls take up to 20 minutes. Compare the channels as they
+    // are now with the state in Redis as it is now: the hourly check may
+    // have reported a change in between. A platform result counts only for a
+    // channel that did not change since it was read.
+    const current = (await this._integrations.getChannels()) as ChannelRow[];
+    const readAt = new Map(
+      channels.map((row) => [row.id, row.updatedAt?.getTime()])
+    );
+    const changed = new Set(
+      current
+        .filter((row) => readAt.get(row.id) !== row.updatedAt?.getTime())
+        .map((row) => row.id)
+    );
+    for (const id of changed) {
+      delete authInvalid[id];
+    }
+    const tokenEvents = current
+      .map((row) => tokenExpiringEvent(row, at))
+      .filter((event): event is HubEvent => !!event);
+
     const previous = await this.loadProblems();
     const diff = diffChannels({
       previous,
-      channels,
+      channels: current,
       now: at,
       authInvalid,
-      authOk,
+      authOk: authOk.filter((id) => !changed.has(id)),
     });
 
     return {
-      channels,
+      channels: current,
       previous,
       diff,
       tokenEvents,
