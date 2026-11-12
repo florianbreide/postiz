@@ -56,7 +56,8 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
   },
   {
     // PLAN 3.3 PR 18: DailyHealth at 07:00 in Berlin. The hub sends its
-    // summary at 07:05 (E38).
+    // summary at 07:05 (E38). Since 0.7.2 the version that saves its state
+    // after the events; the worker switches an existing schedule over.
     scheduleId: 'ysocial-daily-health',
     spec: {
       calendars: [{ hour: 7, minute: 0 }],
@@ -64,15 +65,19 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
     },
     action: {
       type: 'startWorkflow',
-      workflowType: 'ysocialDailyHealthWorkflow',
+      workflowType: 'ysocialDailyHealthWorkflowV101',
       workflowId: 'ysocial-daily-health',
       taskQueue,
       args: [],
-      workflowExecutionTimeout: '1 hour',
+      // Temporal starts the run at 07:00 even with the worker down; it then
+      // waits for the worker, up to 09:00. The run itself takes up to 51
+      // minutes (check, then saving the state).
+      workflowExecutionTimeout: '2 hours',
     },
     policies: {
       overlap: ScheduleOverlapPolicy.SKIP,
-      // If the worker was down at 07:00, run as soon as it is back, up to 09:00.
+      // If the Temporal server was down at 07:00, start as soon as it is
+      // back, up to 09:00.
       catchupWindow: '2 hours',
     },
   },

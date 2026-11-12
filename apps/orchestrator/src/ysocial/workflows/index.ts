@@ -7,4 +7,5 @@ export * from './ysocial.verify.post.workflow';
 export * from './ysocial.verify.post.workflow.v1.0.1';
 export * from './ysocial.channel.check.workflow';
 export * from './ysocial.daily.health.workflow';
+export * from './ysocial.daily.health.workflow.v1.0.1';
 export * from './ysocial.token.migration.workflow';

@@ -22,6 +22,7 @@ import {
   DailyHealthSummary,
   YsocialChannelHealthService,
 } from '../../../../libraries/ysocial/src/health/ysocial.channel.health.service';
+import { ChannelProblemChanges } from '../../../../libraries/ysocial/src/health/channel.health';
 import {
   YsocialTokenMigrationResult,
   YsocialTokenMigrationService,
@@ -172,6 +173,24 @@ export class YsocialActivities {
     _input?: Record<string, never>
   ): Promise<{ events: HubEvent[]; summary: DailyHealthSummary }> {
     return this._channelHealth.runDailyHealth();
+  }
+
+  // DailyHealth of ysocialDailyHealthWorkflowV101: the same check, but it
+  // saves nothing. The workflow saves the changes after the events.
+  async ysocialPrepareDailyHealth(_input?: Record<string, never>): Promise<{
+    events: HubEvent[];
+    summary: DailyHealthSummary;
+    changes: ChannelProblemChanges;
+  }> {
+    return this._channelHealth.prepareDailyHealth();
+  }
+
+  // Which channels were reported, in Redis. Only the given channels change,
+  // and only if nothing else changed them since the check.
+  async ysocialSaveChannelProblems(input: {
+    changes: ChannelProblemChanges;
+  }): Promise<void> {
+    await this._channelHealth.saveProblemChanges(input.changes);
   }
 
   // Encrypts plaintext channel tokens (PR 25). Only counts in the result.
