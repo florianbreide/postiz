@@ -26,10 +26,12 @@ import { YsocialStatusController } from './ysocial.status.controller';
 import { YsocialReadController } from './ysocial.read.controller';
 import { YsocialRetryController } from './ysocial.retry.controller';
 import { YsocialTestController } from './ysocial.test.controller';
+import { YsocialInboxController } from './ysocial.inbox.controller';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
+import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
@@ -140,6 +142,7 @@ describe('every ysocial controller', () => {
     expect(controllers).toContain(YsocialReadController);
     expect(controllers).toContain(YsocialRetryController);
     expect(controllers).toContain(YsocialTestController);
+    expect(controllers).toContain(YsocialInboxController);
   });
 
   // The PoliciesGuard of Postiz skips paths with /auth, so such a path would
@@ -185,6 +188,8 @@ describe('GET /ysocial/status', () => {
       .overrideProvider(YsocialRetryService)
       .useValue({})
       .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
+      .overrideProvider(YsocialInboxRepository)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

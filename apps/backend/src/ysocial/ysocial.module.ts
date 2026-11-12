@@ -3,14 +3,18 @@ import { YsocialStatusController } from './ysocial.status.controller';
 import { YsocialReadController } from './ysocial.read.controller';
 import { YsocialRetryController } from './ysocial.retry.controller';
 import { YsocialTestController } from './ysocial.test.controller';
+import { YsocialInboxController } from './ysocial.inbox.controller';
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialTestRoutesGuard } from './ysocial.test.routes.guard';
+import { YsocialInboxDemoGuard } from './ysocial.inbox.demo.guard';
 import { YsocialStatusService } from './ysocial.status.service';
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/health/ysocial.test.switch.service';
+import { YsocialInboxService } from '../../../../libraries/ysocial/src/inbox/ysocial.inbox.service';
+import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 // Entry point for all ysocial backend code. Imported once in
@@ -24,17 +28,21 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialReadController,
     YsocialRetryController,
     YsocialTestController,
+    YsocialInboxController,
   ],
   providers: [
     ysocialTokenKeyCheckProvider,
     YsocialTokenGuard,
     YsocialTestRoutesGuard,
+    YsocialInboxDemoGuard,
     YsocialStatusService,
     YsocialReadService,
     YsocialReadRepository,
     YsocialRetryService,
     YsocialRetryRepository,
     YsocialTestSwitchService,
+    YsocialInboxService,
+    YsocialInboxRepository,
   ],
 })
 export class YsocialModule {}
