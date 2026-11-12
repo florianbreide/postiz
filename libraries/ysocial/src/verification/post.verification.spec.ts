@@ -362,6 +362,24 @@ describe('post.failed once per failed attempt', () => {
     expect(quiet.events).toEqual([]);
   });
 
+  it('reports a second ERROR with a new updatedAt without a QUEUE in between', () => {
+    // Postiz retries inside one run and sets ERROR again.
+    const first = perAttempt(failed(U1), T0 + MIN);
+    const second = perAttempt(failed(U2), T0 + 2 * MIN, first.memory);
+    expect(kinds(second)).toEqual(['post.failed']);
+    expect(second.events[0].id).toBe(`post.failed:post-1:${T0}-${U2}`);
+    expect(second.events[0].id).not.toBe(first.events[0].id);
+  });
+
+  it('reports again when updatedAt shows up after a snapshot without it', () => {
+    // An old worker read the snapshot of the earlier look.
+    const first = perAttempt(failed(), T0 + MIN);
+    expect(first.events[0].id).toBe(`post.failed:post-1:${T0}`);
+    const second = perAttempt(failed(U1), T0 + 2 * MIN, first.memory);
+    expect(kinds(second)).toEqual(['post.failed']);
+    expect(second.events[0].id).toBe(`post.failed:post-1:${T0}-${U1}`);
+  });
+
   it('falls back to the scheduled time without updatedAt and does not repeat', () => {
     const first = perAttempt(failed(), T0 + MIN);
     expect(first.events[0].id).toBe(`post.failed:post-1:${T0}`);

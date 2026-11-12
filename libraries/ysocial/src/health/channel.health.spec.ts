@@ -139,6 +139,7 @@ describe('diffChannels', () => {
     });
     expect(hourly.events).toEqual([]);
     expect(hourly.next['int-1'].kind).toBe('channel.auth_invalid');
+    expect(hourly.next['int-1'].since).toBe(daily.next['int-1'].since);
 
     const reconnected = diffChannels({
       previous: hourly.next,
