@@ -86,6 +86,8 @@ const setup = (
     get: async (key: string) => saved[key],
     set: async (key: string, value: string) => (saved[key] = value),
   };
+  // A fixed clock: no test depends on how long it really runs.
+  (service as any).clock = () => 0;
   return { service, integrations, posts, manager, saved };
 };
 
@@ -341,9 +343,13 @@ describe('DailyHealth when channels change during the platform calls', () => {
     before: ChannelRow[],
     after: ChannelRow[],
     analytics: jest.Mock,
-    previous: Record<string, unknown> = {}
+    previous: Record<string, unknown> = {},
+    elapsedMs = 0
   ) => {
     const ctx = setup(before, { facebook: { analytics } });
+    // Read at the start of the run and after the platform calls.
+    const times = [0, elapsedMs];
+    (ctx.service as any).clock = () => times.shift() ?? elapsedMs;
     ctx.integrations.getChannels
       .mockResolvedValueOnce(before)
       .mockResolvedValueOnce(after);
@@ -489,6 +495,127 @@ describe('DailyHealth when channels change during the platform calls', () => {
       analytics
     );
     expect(analytics).toHaveBeenCalledTimes(1);
+  });
+
+  describe('time of the comparison', () => {
+    const LATER = new Date(NOW.getTime() + 20 * 60_000);
+    const MIN = 60_000;
+
+    it('stamps a new disconnect with the time of the comparison', async () => {
+      const analytics = jest.fn().mockResolvedValue([]);
+      const { events } = await run(
+        [row('int-x')],
+        [row('int-x', { refreshNeeded: true, updatedAt: changedAt })],
+        analytics,
+        {},
+        20 * MIN
+      );
+      const disconnected = events.find(
+        (e) => e.kind === 'channel.disconnected'
+      )!;
+      expect(disconnected.occurredAt).toBe(LATER.toISOString());
+      expect(Date.parse(disconnected.occurredAt)).toBeGreaterThan(
+        NOW.getTime() + 15 * MIN
+      );
+    });
+
+    it('stamps auth_invalid, since and its id with that time', async () => {
+      const analytics = jest.fn().mockRejectedValue(AUTH_ERROR);
+      const { events, state } = await run(
+        [row('int-x')],
+        [row('int-x')],
+        analytics,
+        {},
+        20 * MIN
+      );
+      const invalid = events.find((e) => e.kind === 'channel.auth_invalid')!;
+      expect(invalid.occurredAt).toBe(LATER.toISOString());
+      expect(invalid.id).toContain(
+        `${row('int-x').updatedAt!.getTime()}-${LATER.getTime()}`
+      );
+      expect(state['int-x'].since).toBe(LATER.toISOString());
+    });
+
+    it('keeps health.daily and token_expiring at the start of the run', async () => {
+      const analytics = jest.fn().mockResolvedValue([]);
+      const expiring = new Date(NOW.getTime() + 3 * DAY);
+      const { events, summary } = await run(
+        [row('int-x', { tokenExpiration: expiring })],
+        [row('int-x', { tokenExpiration: expiring })],
+        analytics,
+        {},
+        20 * MIN
+      );
+      const daily = events.find((e) => e.kind === 'health.daily')!;
+      const warning = events.find((e) => e.kind === 'channel.token_expiring')!;
+      expect(daily.occurredAt).toBe(NOW.toISOString());
+      expect(warning.occurredAt).toBe(NOW.toISOString());
+      expect(summary.day).toBe('2026-10-27');
+    });
+
+    it('does not let a clock that runs backwards move the time before the start', async () => {
+      const analytics = jest.fn().mockRejectedValue(AUTH_ERROR);
+      const { events } = await run(
+        [row('int-x')],
+        [row('int-x')],
+        analytics,
+        {},
+        -5 * MIN
+      );
+      expect(
+        events.find((e) => e.kind === 'channel.auth_invalid')!.occurredAt
+      ).toBe(NOW.toISOString());
+    });
+  });
+
+  describe('unclear', () => {
+    const unclearCall = () =>
+      jest.fn().mockRejectedValue(new Error('(#4) Application request limit'));
+
+    it('lists an unchanged channel', async () => {
+      const { summary } = await run(
+        [row('int-x')],
+        [row('int-x')],
+        unclearCall()
+      );
+      expect(summary.unclear).toEqual(['int-x']);
+    });
+
+    it('leaves out a channel that is gone in the second read', async () => {
+      const { summary } = await run([row('int-x')], [], unclearCall());
+      expect(summary.unclear).toEqual([]);
+    });
+
+    it('leaves out a channel with a new updatedAt', async () => {
+      const { summary } = await run(
+        [row('int-x')],
+        [row('int-x', { updatedAt: changedAt })],
+        unclearCall()
+      );
+      expect(summary.unclear).toEqual([]);
+    });
+  });
+
+  it('prepareDailyHealth leaves the disconnect of the hourly check alone', async () => {
+    const analytics = jest.fn().mockResolvedValue([]);
+    const before = [row('int-x')];
+    const after = [row('int-x', { refreshNeeded: true, updatedAt: changedAt })];
+    const ctx = setup(before, { facebook: { analytics } });
+    ctx.integrations.getChannels
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
+    ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify({
+      'int-x': {
+        kind: 'channel.disconnected',
+        updatedAt: before[0].updatedAt!.getTime(),
+        since: '2026-10-26T06:00:00.000Z',
+      },
+    });
+
+    const { events, changes } = await ctx.service.prepareDailyHealth(NOW);
+
+    expect(events.map((e) => e.kind)).toEqual(['health.daily']);
+    expect(changes).toEqual({});
   });
 
   it('reads the channels twice, both times before Redis', async () => {
