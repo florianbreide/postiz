@@ -21,7 +21,7 @@ Getestet wird nur mit Kanälen von Y Social. Keine Kundenkanäle, keine Kundenda
 
 ## Auf Staging
 
-9. [ ] Neuer Stand läuft. `prisma db push` beim Start lief ohne Fehler durch (Log von Postiz).
+9. [ ] Neuer Stand läuft. `prisma db push` beim Start lief ohne Fehler durch (Log von Postiz). Ab PR 25 steht im Log von Backend und Orchestrator `token encryption on (key <kid>)` mit derselben Schlüssel-ID wie vor dem Sync.
 10. [ ] Healthchecks: `infra/scripts/health.sh` meldet alle Dienste `healthy`. Orchestrator `/health/status` antwortet mit 200.
 11. [ ] ysocial-Statusroute intern, im Container `postiz` (das Image hat kein `curl`):
     - `docker exec postiz node -e 'fetch("http://localhost:3000/ysocial/status").then(r => console.log(r.status))'` gibt `401`.
@@ -32,12 +32,12 @@ Getestet wird nur mit Kanälen von Y Social. Keine Kundenkanäle, keine Kundenda
 15. [ ] Post je Plattform (nach Florians Freigabe aus Schritt 8): Florian plant je verbundener Plattform den freigegebenen Post mit Text und Bild, wenige Minuten in der Zukunft. Er erscheint auf der Plattform, Postiz zeigt PUBLISHED und eine `releaseURL`.
 16. [ ] Umplanen (nach Florians Freigabe): Florian legt einen geplanten Testpost auf eine andere Uhrzeit. Er geht nur zur neuen Zeit raus, nicht doppelt.
 17. [ ] Löschen (nach Florians Freigabe): Florian löscht einen geplanten Testpost. Er geht nicht raus.
-18. [ ] Token-Refresh: Bei einem Kanal mit Refresh-Token die Aktualisierung auslösen. Der Kanal bleibt aktiv, im Log steht kein Fehler.
+18. [ ] Token-Refresh: Bei einem Kanal mit Refresh-Token die Aktualisierung auslösen. Der Kanal bleibt aktiv, im Log steht kein Fehler. Ab PR 25 meldet ein Lauf von `ysocialTokenMigrationWorkflow` danach `encrypted: 0` und `remaining: 0` für beide Felder (Befehl in `apps/orchestrator/src/ysocial/README.md`).
 19. [ ] Medien: Bild und Video hochladen. Die Vorschau lädt, die Datei ist unter `/uploads/…` ohne Anmeldung erreichbar.
 20. [ ] Neustart: Den Postiz-Container neu starten. Die geplanten Testposts sind danach noch geplant und gehen pünktlich raus. Die Datenbank `hub` ist unverändert.
 21. [ ] Temporal-Workflows: In der Temporal-UI (SSH-Tunnel) laufen die Workflows der geplanten Posts. Umgeplante und gelöschte Posts haben keinen laufenden Workflow mehr. Es gibt keine fehlgeschlagenen Workflows seit dem Start.
 22. [ ] Hub-Namespace `ysocial`: Die Hub-Workflows laufen weiter, kein Postiz-Workflow trägt dort ein `postId`.
-23. [ ] Logs der letzten 30 Minuten: keine neuen Fehler, keine Tokens im Log.
+23. [ ] Logs der letzten 30 Minuten: keine neuen Fehler, keine Tokens im Log, auch kein `ys1:`. Steht `ys1:` in einer Prisma-Fehlermeldung (`PrismaClientValidationError`), ist das kein Leck, nur die Chiffre: den Fehler im Code melden, den Schlüssel nicht wechseln.
 
 ## Danach
 

@@ -18,6 +18,7 @@ import {
   READ_API_FORBIDDEN_FIELDS,
   YsocialReadRepository,
 } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
+import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 const ENV = 'YSOCIAL_SERVICE_TOKEN';
 const token = randomBytes(32).toString('hex');
@@ -111,6 +112,8 @@ describe('GET /ysocial/customers, /integrations, /posts', () => {
       .overrideProvider(YsocialRetryRepository)
       .useValue({})
       .overrideProvider(YsocialRetryService)
+      .useValue({})
+      .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

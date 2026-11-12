@@ -1,5 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+// ysocial patch 3 (YSOCIAL-PATCHES.md)
+import { withYsocialTokenEncryption } from '../../../../ysocial/src/tokens/ysocial.token.extension';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -12,6 +14,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         },
       ],
     });
+    // ysocial patch 3 (YSOCIAL-PATCHES.md): Integration.token and
+    // refreshToken are encrypted on write and decrypted on read.
+    return withYsocialTokenEncryption(this);
   }
   async onModuleInit() {
     await this.$connect();

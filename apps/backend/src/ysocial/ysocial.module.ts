@@ -11,11 +11,13 @@ import { YsocialReadRepository } from '../../../../libraries/ysocial/src/databas
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/health/ysocial.test.switch.service';
+import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 // Entry point for all ysocial backend code. Imported once in
 // apps/backend/src/app.module.ts (patch 1, see YSOCIAL-PATCHES.md).
 // DatabaseModule is global, so ysocial services can inject the Postiz
 // services and repositories without further patches.
+// The token key check stops the start without the right key (PR 25).
 @Module({
   controllers: [
     YsocialStatusController,
@@ -24,6 +26,7 @@ import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/heal
     YsocialTestController,
   ],
   providers: [
+    ysocialTokenKeyCheckProvider,
     YsocialTokenGuard,
     YsocialTestRoutesGuard,
     YsocialStatusService,

@@ -21,6 +21,10 @@ Gemeinsamer Code für die ysocial-Ordner in Backend und Orchestrator.
 - `src/read/ysocial.read.service.ts`, `src/dtos/ysocial.posts.query.dto.ts`: Lese-API für den Hub.
 - `src/retry/retry.rules.ts`: Wann „Erneut versuchen“ darf und wann der Ausgang unklar ist, als reine Funktionen. Tabelle der Fälle in `apps/orchestrator/src/ysocial/README.md`.
 - `src/retry/ysocial.retry.service.ts`, `src/database/ysocial.retry.repository.ts`, `src/dtos/ysocial.retry.dto.ts`: „Erneut versuchen“. Setzt `ERROR` → `QUEUE` und startet den Post-Workflow über `PostsService.startWorkflow` von Postiz. Ruft nie selbst einen Provider auf.
+- `src/tokens/token.crypto.ts`: Verschlüsselung der Kanal-Tokens mit AES-256-GCM, Format `ys1:<kid>:<iv>:<tag>:<chiffre>`, Schlüssel `YSOCIAL_TOKEN_KEY`. Die Meldungen nennen Felder und Schlüssel-IDs, nie Werte.
+- `src/tokens/ysocial.token.extension.ts`: Prisma-Erweiterung, die `PrismaService` von Postiz zurückgibt (Patch 3). Entschlüsselt beim Lesen, auch über `include`, verschlüsselt beim Schreiben, auch verschachtelt. `where` bleibt unverändert.
+- `src/tokens/ysocial.token.key.check.ts`: Startprüfung des Schlüssels in Backend und Orchestrator (fail-closed).
+- `src/tokens/ysocial.token.migration.service.ts`: Migration der Klartext-Tokens, von Hand per Workflow `ysocialTokenMigrationWorkflow`.
 - `jest/prisma-client.stub.js`: Ersatz für `@prisma/client` in den Tests. Der echte Client lädt beim Import eine `.env` (siehe `docs/YSOCIAL-LOKAL.md`).
 - `jest.config.js`: Jest für die ysocial-Ordner. Aufruf aus dem Repo-Root mit Node 22: `pnpm exec jest -c libraries/ysocial/jest.config.js`.
 - `upstream-check/`: Logik des Workflows `.github/workflows/ysocial-upstream-check.yml`, dazu Tests und erfundene Testdaten. Reines ESM ohne Abhängigkeiten, denn der Workflow lädt nur diesen Ordner und installiert nichts. Jest lässt die Tests aus. Aufruf aus dem Repo-Root mit Node 22: `node --test libraries/ysocial/upstream-check/ysocial-upstream-check.test.mjs`.

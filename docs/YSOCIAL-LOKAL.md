@@ -66,6 +66,7 @@ Nach jedem neuen Clone einmal:
 | `CLOUDFLARE_*` | leer | die Platzhalter der Vorlage löschen |
 | `YSOCIAL_SERVICE_TOKEN` | Ausgabe von `openssl rand -hex 32` | mindestens 32 Zeichen. Fehlt er, antwortet `/ysocial/status` mit 503 |
 | `DISABLE_REGISTRATION` | `true` | Genau eine Registrierung geht trotzdem, solange es keine Organisation gibt (`auth.service.ts`) |
+| `YSOCIAL_TOKEN_KEY` | Ausgabe von `openssl rand -base64 32` | optional. Mit Schlüssel speichert Postiz Kanal-Tokens verschlüsselt (`ys1:…`). Ohne Schlüssel bleiben sie Klartext. Sobald es verschlüsselte Tokens gibt, starten Backend und Orchestrator ohne den Schlüssel nicht mehr. Nicht wechseln, sonst sind die gespeicherten Tokens unlesbar |
 
 Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleibt auskommentiert, dann ist ein neuer Nutzer sofort aktiv.
 
@@ -103,7 +104,7 @@ Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleib
 | Orchestrator | `curl http://localhost:3002/health/status` | `{"status":"ok"}` |
 | Registrierung gesperrt | `curl http://localhost:3000/auth/can-register` | `{"register":false}`, sobald ein Nutzer existiert |
 | ysocial ohne Token | `curl -i http://localhost:3000/ysocial/status` | `401` (ohne `YSOCIAL_SERVICE_TOKEN` in der `.env`: `503`) |
-| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.5.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
+| ysocial mit Token | siehe unten | `200` und `{"ok":true,"module":"ysocial","version":"0.6.0","worker":{…}}`. Ohne die Hub-Variablen steht dort `"label":"Worker aus"` mit Grund |
 | Temporal-UI | `http://localhost:8080` im Browser | Namespace `default` sichtbar |
 
 Statusroute mit Token, ohne ihn auszugeben. Nur für dich im eigenen Terminal. Claude führt das nicht aus, weil Claude die `.env` nie liest.
@@ -128,7 +129,17 @@ Die Datei hat die Rechte 600 und steht in `.git/info/exclude` (siehe „Lokale D
 
     corepack pnpm exec jest -c libraries/ysocial/jest.config.js
 
-Erwartet (Stand PR 19): 24 Test-Suiten grün, eine übersprungen (der Test gegen einen echten Temporal-Server, siehe unten). Die Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat oder ein Pfad `/auth` enthält. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+Erwartet (Stand PR 25): alle Test-Suiten grün, zwei übersprungen: der Test gegen einen echten Temporal-Server (siehe unten) und der Integrationstest der Token-Verschlüsselung (nur mit `YSOCIAL_IT_DATABASE_URL`). Die übrigen Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat oder ein Pfad `/auth` enthält. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+
+### Integrationstest der Token-Verschlüsselung (ab PR 25)
+
+Der Test nimmt den echten Prisma-Client und eine Wegwerf-Datenbank auf `127.0.0.1`. Er legt dort das Schema `ysocial_it` an und setzt es bei jedem Lauf zurück. Andere Schemas fasst er nicht an, ein anderer Host als `localhost` oder `127.0.0.1` bricht ab. Nicht die Postiz-Datenbank aus `docker-compose.dev.yaml` nehmen, sondern einen eigenen Container, zum Beispiel:
+
+    docker run -d --name ysocial-it-pg -e POSTGRES_USER=ysocial_it -e POSTGRES_DB=ysocial_it -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:17.11-bookworm
+    YSOCIAL_IT_DATABASE_URL=postgresql://ysocial_it@127.0.0.1:55432/ysocial_it corepack pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.token.integration
+    docker rm -f ysocial-it-pg
+
+Der echte Prisma-Client lädt beim Import die `.env` im Repo-Root (siehe „Bekannte Stolperstellen“). Deshalb nur in einem Worktree mit eigenem `node_modules` und ohne echte `.env`. In GitHub läuft der Test bei jedem PR gegen den Postgres-Service des Workflows `ysocial tests`.
 
 ## ysocial-Worker lokal (ab PR 16)
 

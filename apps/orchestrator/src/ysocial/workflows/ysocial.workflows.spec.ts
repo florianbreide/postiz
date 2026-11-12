@@ -10,6 +10,7 @@ const mockActivities = {
   ysocialStartPostVerifications: jest.fn(),
   ysocialCheckChannels: jest.fn(),
   ysocialRunDailyHealth: jest.fn(),
+  ysocialMigrateTokens: jest.fn(),
 };
 const mockInfo = {
   workflowId: 'ysocial-ping-qa',
@@ -33,6 +34,7 @@ import { emitHubEvent } from './ysocial.emit';
 import { ysocialPostVerificationWorkflow } from './ysocial.post.verification.workflow';
 import { ysocialChannelCheckWorkflow } from './ysocial.channel.check.workflow';
 import { ysocialDailyHealthWorkflow } from './ysocial.daily.health.workflow';
+import { ysocialTokenMigrationWorkflow } from './ysocial.token.migration.workflow';
 import { createHubEvent } from '../../../../../libraries/ysocial/src/events/hub.event';
 
 const POSTIZ_WORKFLOWS = join(__dirname, '..', '..', 'workflows');
@@ -74,6 +76,7 @@ describe('ysocial workflows', () => {
         'ysocialVerifyPostWorkflow',
         'ysocialChannelCheckWorkflow',
         'ysocialDailyHealthWorkflow',
+        'ysocialTokenMigrationWorkflow',
       ])
     );
     const postiz = postizWorkflowNames();
@@ -220,5 +223,24 @@ describe('channel workflows', () => {
     expect(
       mockStartChild.mock.calls.map(([, options]) => options.args[0].kind)
     ).toEqual(['channel.auth_invalid', 'health.daily']);
+  });
+});
+
+describe('ysocialTokenMigrationWorkflow', () => {
+  const counts = { encrypted: 1, changedMeanwhile: 0, remaining: 0 };
+
+  it('returns only the result of the activity and passes batchSize on', async () => {
+    mockActivities.ysocialMigrateTokens.mockReset();
+    const result = { token: counts, refreshToken: counts };
+    mockActivities.ysocialMigrateTokens.mockResolvedValue(result);
+    expect(await ysocialTokenMigrationWorkflow({ batchSize: 50 })).toBe(result);
+    expect(mockActivities.ysocialMigrateTokens).toHaveBeenCalledWith({
+      batchSize: 50,
+    });
+    await ysocialTokenMigrationWorkflow();
+    expect(mockActivities.ysocialMigrateTokens).toHaveBeenLastCalledWith({
+      batchSize: undefined,
+    });
+    expect(mockStartChild).not.toHaveBeenCalled();
   });
 });

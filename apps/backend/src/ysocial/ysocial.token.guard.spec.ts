@@ -29,6 +29,7 @@ import { YsocialTestController } from './ysocial.test.controller';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
+import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
@@ -182,6 +183,8 @@ describe('GET /ysocial/status', () => {
       .overrideProvider(YsocialRetryRepository)
       .useValue({})
       .overrideProvider(YsocialRetryService)
+      .useValue({})
+      .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

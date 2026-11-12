@@ -50,7 +50,7 @@ class TestWorkerService extends YsocialWorkerService {
 
   constructor() {
     super(
-      new YsocialActivities({} as any, {} as any, {} as any),
+      new YsocialActivities({} as any, {} as any, {} as any, {} as any),
       undefined as any
     );
     (this as any)._temporal = this.temporal;

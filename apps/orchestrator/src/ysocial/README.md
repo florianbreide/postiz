@@ -15,6 +15,8 @@ Vorgabe: Übergabe §5, §7.1 und §11 im Hub-Repo, lokal `../social-hub/docs/HA
 | `ysocial.activities.ts` | Aktivitäten, alle mit Präfix `ysocial` |
 | `workflows/` | Workflows des Workers, alle mit Präfix `ysocial` |
 
+Außerdem hängt `YsocialTokenKeyCheck` (aus `libraries/ysocial/src/tokens/`) im Modul, siehe „Verschlüsselte Kanal-Tokens“ unten.
+
 - Namespace aus `YSOCIAL_TEMPORAL_NAMESPACE` (auf Staging und Prod `ysocial`), Task-Queue `ysocial-postiz`. Der Hub-Worker nutzt im selben Namespace die Queue `ysocial-hub`.
 - Höchstens 5 Aktivitäten gleichzeitig.
 - Temporal-Adresse, `TEMPORAL_TLS` und `TEMPORAL_API_KEY` kommen aus denselben Variablen wie bei Postiz.
@@ -32,7 +34,7 @@ Der Worker startet nur, wenn alle drei Variablen gesetzt sind (fail-closed):
 
 `YSOCIAL_WORKER_ENABLED=false` schaltet ihn ab, auch wenn alles gesetzt ist.
 
-Fehlt etwas, startet Postiz normal. Im Log steht einmal `ysocial worker off:` mit den fehlenden Namen, nie mit Werten. Schlägt der Start fehl oder bricht der Worker ab, startet er nach 30 s neu, danach mit doppelter Pause bis höchstens 10 Minuten. Ein Fehler des ysocial-Workers beendet nie den Orchestrator.
+Fehlt etwas, startet Postiz normal. Im Log steht einmal `ysocial worker off:` mit den fehlenden Namen, nie mit Werten. Schlägt der Start fehl oder bricht der Worker ab, startet er nach 30 s neu, danach mit doppelter Pause bis höchstens 10 Minuten. Ein Fehler des ysocial-Workers beendet nie den Orchestrator. Die einzige Ausnahme ist die Startprüfung des Token-Schlüssels (unten).
 
 ## Zustand
 
@@ -153,6 +155,29 @@ Läufe von Hand (A1, PR 18 QA 3):
 
 Für einen zweiten Lauf eine neue Workflow-ID nehmen, zum Beispiel mit Uhrzeit.
 
+## Verschlüsselte Kanal-Tokens (PR 25, E24)
+
+Postiz speichert `Integration.token` und `refreshToken` verschlüsselt, sobald `YSOCIAL_TOKEN_KEY` gesetzt ist. Format `ys1:<kid>:<iv>:<tag>:<chiffre>`, AES-256-GCM. `<kid>` sind die ersten 8 Hex-Zeichen von SHA-256 über den Schlüssel. Die Erweiterung hängt über Patch 3 in `PrismaService`, die Logik liegt in `libraries/ysocial/src/tokens/`. Provider und Postiz-Code sehen weiter den Klartext.
+
+**Startprüfung** (`YsocialTokenKeyCheck`, in Backend und Orchestrator). Nest wartet beim Aufbau der Provider auf sie. Schlägt sie fehl, beendet sich der Prozess mit Exit-Code 1, bevor ein Port oder ein Temporal-Worker startet. pm2 startet ihn neu, die Meldung steht dann bei jedem Versuch im Log. Sie schlägt fehl, wenn:
+- `YSOCIAL_TOKEN_KEY` gesetzt ist, aber nicht genau 32 Byte als Base64 ergibt,
+- der Schlüssel fehlt, es aber verschlüsselte Tokens gibt,
+- Tokens mit einem anderen Schlüssel verschlüsselt sind. Die Meldung nennt beide `<kid>`, nie einen Token.
+
+Läuft alles, steht im Log `token encryption on (key <kid>)`, ohne Schlüssel `token encryption off: …`.
+
+**Migration** der Tokens, die noch Klartext sind. Läuft nur von Hand, beim Start wird nichts umgeschrieben. Voraussetzung: `YSOCIAL_TOKEN_KEY` ist in Backend und Orchestrator gesetzt, beide sind damit neu gestartet, und der ysocial-Worker läuft. Im Temporal-Container von Staging oder Prod:
+
+    temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialTokenMigrationWorkflow --workflow-id ysocial-token-migration-$(date +%Y%m%d-%H%M)
+    temporal workflow result --namespace ysocial --workflow-id <ID von oben>
+
+Ergebnis, nur Zahlen: `{"token":{"encrypted":…,"changedMeanwhile":…,"remaining":0},"refreshToken":{…}}`. `changedMeanwhile` zählt Tokens, die Postiz während des Laufs selbst neu geschrieben hat (Refresh), die sind schon verschlüsselt. Erfasst werden alle Kanäle, auch gelöschte. Ein zweiter Lauf ist ungefährlich und meldet `encrypted: 0`. Fehlt der Schlüssel, bricht der Lauf sofort ab (`YsocialTokenKey`, ohne Wiederholung). Optional `--input '{"batchSize": 100}'`, höchstens 500.
+
+**Grenzen:**
+- Der Temporal-Verlauf enthält weiter Klartext-Tokens. Postiz gibt ganze Kanal-Zeilen an seine Aktivitäten weiter (`refresh.token.workflow.ts`, `post.workflow.v1.0.1.ts` Z. 198–204), die Aktivität liest sie entschlüsselt. Das ist offen als Frage an Florian, Option für Phase 2: ein Payload-Codec für Temporal.
+- Die Fluent-API von Prisma (`post.findUnique().integration()`) gibt die Chiffre zurück, Raw-Queries gehen an der Erweiterung vorbei. Postiz nutzt beides nicht. `ysocial.token.bypass.spec.ts` prüft die Quellen bei jedem PR.
+- Ein Schlüsselwechsel (Rotation) gehört nicht zu PR 25.
+
 ## Lese-API für den Hub (Backend, PR 18)
 
 Hinter `YsocialTokenGuard` wie `/ysocial/status`, von außen gesperrt (`/api/ysocial/*`):
@@ -272,6 +297,7 @@ Ergebnis: `{"eventId":"ping:ysocial-worker:ysocial-ping-qa","delivery":"started"
 ## Tests
 
 - Alle: `pnpm exec jest -c libraries/ysocial/jest.config.js` (Node 22).
+- Gegen echtes Prisma und Postgres, sonst übersprungen: `YSOCIAL_IT_DATABASE_URL=… pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.token.integration`, siehe `docs/YSOCIAL-LOKAL.md`. In GitHub läuft er bei jedem PR.
 - Gegen einen echten Temporal-Server, sonst übersprungen: `YSOCIAL_IT_TEMPORAL_ADDRESS=127.0.0.1:7233 pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.worker.integration`. Der Namespace `ysocial` muss existieren (`temporal operator namespace create --namespace ysocial`). Der Test startet den echten Worker, einen Mock-Hub, der beim ersten Versuch 503 antwortet, einen Ping und eine PostVerification mit zwei erfundenen Posts aus einem gestellten Dienst, ohne Datenbank. Er legt den Schedule an und löscht ihn am Ende wieder.
 - Zeitraffer für PostVerification: `ysocial.verify.post.workflow.spec.ts`. `sleep` stellt dort die Uhr vor, statt zu warten.
 - Der Bundler von Temporal liest beim Test die TypeScript-Quellen. Die `.swcrc` von Postiz in `apps/orchestrator/` hat einen `baseUrl` von einem fremden Rechner, der Test schaltet sie für den Bundler ab. Im Betrieb bündelt der Worker das kompilierte JavaScript aus `dist`, dort spielt die Datei keine Rolle.

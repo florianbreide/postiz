@@ -24,6 +24,7 @@ import { YsocialModule } from './ysocial.module';
 import { TemporalService } from 'nestjs-temporal-core';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
+import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 
 const ENV = 'YSOCIAL_SERVICE_TOKEN';
@@ -113,6 +114,8 @@ describe('POST /ysocial/posts/:id/retry', () => {
       .useValue({})
       .overrideProvider(YsocialRetryRepository)
       .useValue(repository)
+      .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     // Same pipe as apps/backend/src/main.ts.
