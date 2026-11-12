@@ -79,6 +79,7 @@ describe('ysocial workflows', () => {
         'ysocialPostVerificationWorkflow',
         'ysocialVerifyPostWorkflow',
         'ysocialVerifyPostWorkflowV101',
+        'ysocialVerifyPostWorkflowV102',
         'ysocialChannelCheckWorkflow',
         'ysocialDailyHealthWorkflow',
         'ysocialDailyHealthWorkflowV101',
