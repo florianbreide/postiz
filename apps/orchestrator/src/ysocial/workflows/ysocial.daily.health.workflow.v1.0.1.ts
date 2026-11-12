@@ -15,7 +15,7 @@ const { ysocialPrepareDailyHealth } = proxyActivities<YsocialActivities>({
 // Redis only and cheap, a retry applies the same changes again. It keeps
 // trying for 10 minutes: without the saved state a problem solved before
 // the next run would get no channel.reconnected. The check above takes up to
-// 41 minutes, both fit into the hour of the schedule.
+// 41 minutes, both fit into the time limit of the schedule.
 const { ysocialSaveChannelProblems } = proxyActivities<YsocialActivities>({
   startToCloseTimeout: '30 seconds',
   scheduleToCloseTimeout: '10 minutes',

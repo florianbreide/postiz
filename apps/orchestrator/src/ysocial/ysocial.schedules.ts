@@ -69,11 +69,15 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
       workflowId: 'ysocial-daily-health',
       taskQueue,
       args: [],
-      workflowExecutionTimeout: '1 hour',
+      // Temporal starts the run at 07:00 even with the worker down; it then
+      // waits for the worker, up to 09:00. The run itself takes up to 51
+      // minutes (check, then saving the state).
+      workflowExecutionTimeout: '2 hours',
     },
     policies: {
       overlap: ScheduleOverlapPolicy.SKIP,
-      // If the worker was down at 07:00, run as soon as it is back, up to 09:00.
+      // If the Temporal server was down at 07:00, start as soon as it is
+      // back, up to 09:00.
       catchupWindow: '2 hours',
     },
   },
