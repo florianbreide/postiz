@@ -15,6 +15,7 @@ import {
   diffChannels,
   problemChanges,
   tokenExpiringEvent,
+  tokenExpiry,
 } from './channel.health';
 import {
   ChannelAuthResult,
@@ -76,6 +77,8 @@ export class YsocialChannelHealthService {
   private readonly _logger = new Logger('ysocial');
   protected store: YsocialProblemStore =
     ioRedis as unknown as YsocialProblemStore;
+  // Wall clock for the time the platform calls take, set in tests.
+  protected clock = () => Date.now();
 
   constructor(
     private _integrations: YsocialIntegrationRepository,
@@ -133,22 +136,17 @@ export class YsocialChannelHealthService {
   // Platform call per channel and the comparison with what was reported.
   private async checkChannelsDaily(now: Date): Promise<DailyChannelCheck> {
     const at = now.getTime();
+    const startedAt = this.clock();
     const channels = (await this._integrations.getChannels()) as ChannelRow[];
     const authInvalid: Record<string, string> = {};
     const authOk: string[] = [];
     const unclear: string[] = [];
-    const tokenEvents: HubEvent[] = [];
     let platformCalls = 0;
     let skipped = 0;
 
     for (const row of channels) {
-      const expiring = tokenExpiringEvent(row, at);
-      if (expiring) {
-        tokenEvents.push(expiring);
-      }
-
       // A disconnected channel or an expired token would only fail.
-      if (channelFlag(row) || expiring?.data?.expired) {
+      if (channelFlag(row) || tokenExpiry(row, at)?.expired) {
         skipped++;
         continue;
       }
@@ -168,21 +166,45 @@ export class YsocialChannelHealthService {
       }
     }
 
+    // The platform calls take up to 20 minutes. Compare the channels as they
+    // are now with the state in Redis as it is now: the hourly check may
+    // have reported a change in between. A platform result counts only for a
+    // channel that did not change since it was read. The channel events carry
+    // the time of this comparison: the hub orders by it, and an event of the
+    // hourly check in between must stay older.
+    const comparedAt = at + Math.max(0, this.clock() - startedAt);
+    const current = (await this._integrations.getChannels()) as ChannelRow[];
+    const readAt = new Map(
+      channels.map((row) => [row.id, row.updatedAt?.getTime()])
+    );
+    const changed = new Set(
+      current
+        .filter((row) => readAt.get(row.id) !== row.updatedAt?.getTime())
+        .map((row) => row.id)
+    );
+    for (const id of changed) {
+      delete authInvalid[id];
+    }
+    const tokenEvents = current
+      .map((row) => tokenExpiringEvent(row, at))
+      .filter((event): event is HubEvent => !!event);
+
     const previous = await this.loadProblems();
     const diff = diffChannels({
       previous,
-      channels,
-      now: at,
+      channels: current,
+      now: comparedAt,
       authInvalid,
-      authOk,
+      authOk: authOk.filter((id) => !changed.has(id)),
     });
 
+    const present = new Set(current.map((row) => row.id));
     return {
-      channels,
+      channels: current,
       previous,
       diff,
       tokenEvents,
-      unclear,
+      unclear: unclear.filter((id) => present.has(id) && !changed.has(id)),
       platformCalls,
       skipped,
     };
