@@ -146,7 +146,12 @@ describe('diffChannels', () => {
 
     const reconnected = diffChannels({
       previous: hourly.next,
-      channels: [channel({ updatedAt: new Date(NOW + 2 * 3600_000) })],
+      channels: [
+        channel({
+          updatedAt: new Date(NOW + 2 * 3600_000),
+          tokenExpiration: new Date(NOW + 60 * DAY),
+        }),
+      ],
       now: NOW + 3 * 3600_000,
     });
     expect(reconnected.events.map((e) => e.kind)).toEqual([
@@ -173,6 +178,7 @@ describe('diffChannels', () => {
 
   describe('ids of "Zugang ungültig"', () => {
     const UPDATED = NOW - DAY;
+    const TOKEN_EXP = NOW + 30 * DAY;
     const invalid = (
       previous: Parameters<typeof diffChannels>[0]['previous'],
       now: number
@@ -203,6 +209,7 @@ describe('diffChannels', () => {
         kind: 'channel.auth_invalid',
         updatedAt: UPDATED,
         since: new Date(NOW).toISOString(),
+        tokenExpiration: TOKEN_EXP,
       });
     });
 
@@ -290,6 +297,216 @@ describe('diffChannels', () => {
       expect(closed.events[0].id).toBe(
         `channel.reconnected:int-1:${NOW + 1000}-${NOW}`
       );
+    });
+  });
+
+  describe('"Zugang ungültig" ends only with a new token or a passed call', () => {
+    const OLD_EXP = NOW + 30 * DAY;
+    const NEW_EXP = NOW + 60 * DAY;
+    const UPDATED = NOW - DAY;
+    const RENAMED = NOW + 1000;
+    const renamed = (patch: Partial<ChannelRow> = {}) =>
+      channel({
+        name: 'Y Social Umbenannt',
+        updatedAt: new Date(RENAMED),
+        ...patch,
+      });
+    const reported = (row: ChannelRow = channel()) =>
+      diffChannels({
+        previous: {},
+        channels: [row],
+        now: NOW,
+        authInvalid: { 'int-1': 'x' },
+      });
+    const kinds = (events: { kind: string }[]) => events.map((e) => e.kind);
+
+    it('keeps it after a rename in the hourly check, state unchanged', () => {
+      const first = reported();
+      const hourly = diffChannels({
+        previous: first.next,
+        channels: [renamed()],
+        now: NOW + 3600_000,
+      });
+      expect(hourly.events).toEqual([]);
+      expect(hourly.next).toEqual(first.next);
+      expect(hourly.next['int-1']).toMatchObject({
+        since: new Date(NOW).toISOString(),
+        updatedAt: UPDATED,
+        tokenExpiration: OLD_EXP,
+      });
+    });
+
+    it('closes it with a new tokenExpiration and names the new updatedAt', () => {
+      const first = reported();
+      const hourly = diffChannels({
+        previous: first.next,
+        channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+        now: NOW + 3600_000,
+      });
+      expect(hourly.events).toHaveLength(1);
+      expect(hourly.events[0].id).toBe(
+        `channel.reconnected:int-1:${RENAMED}-${NOW}`
+      );
+      expect(hourly.events[0].kind).toBe('channel.reconnected');
+      expect(hourly.events[0].data).toEqual({
+        previous: 'channel.auth_invalid',
+      });
+      expect(hourly.next).toEqual({});
+    });
+
+    it('keeps it for null stored and null at the channel', () => {
+      const first = reported(channel({ tokenExpiration: null }));
+      expect(first.next['int-1'].tokenExpiration).toBeNull();
+      const hourly = diffChannels({
+        previous: first.next,
+        channels: [renamed({ tokenExpiration: null })],
+        now: NOW + 3600_000,
+      });
+      expect(hourly.events).toEqual([]);
+      expect(hourly.next).toEqual(first.next);
+    });
+
+    it('closes it when null stored and the channel gets a date', () => {
+      const first = reported(channel({ tokenExpiration: null }));
+      const hourly = diffChannels({
+        previous: first.next,
+        channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+        now: NOW + 3600_000,
+      });
+      expect(kinds(hourly.events)).toEqual(['channel.reconnected']);
+      expect(hourly.next).toEqual({});
+    });
+
+    it('closes it when a date is stored and the channel gets null', () => {
+      const first = reported();
+      const hourly = diffChannels({
+        previous: first.next,
+        channels: [renamed({ tokenExpiration: null })],
+        now: NOW + 3600_000,
+      });
+      expect(kinds(hourly.events)).toEqual(['channel.reconnected']);
+      expect(hourly.next).toEqual({});
+    });
+
+    describe('state of 0.7.4 without tokenExpiration', () => {
+      const old = {
+        'int-1': {
+          kind: 'channel.auth_invalid' as const,
+          updatedAt: UPDATED,
+          since: '2026-10-26T06:00:00.000Z',
+        },
+      };
+
+      it('stays open for a new updatedAt and a new tokenExpiration', () => {
+        const result = diffChannels({
+          previous: old,
+          channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+          now: NOW,
+        });
+        expect(result.events).toEqual([]);
+        expect(result.next).toEqual(old);
+      });
+
+      it('closes with authOk', () => {
+        const result = diffChannels({
+          previous: old,
+          channels: [renamed()],
+          now: NOW,
+          authOk: ['int-1'],
+        });
+        expect(kinds(result.events)).toEqual(['channel.reconnected']);
+        expect(result.events[0].id).toBe(
+          `channel.reconnected:int-1:${RENAMED}-${Date.parse(
+            '2026-10-26T06:00:00.000Z'
+          )}`
+        );
+        expect(result.next).toEqual({});
+      });
+    });
+
+    describe('state that went through Redis as JSON', () => {
+      const viaRedis = (state: ReturnType<typeof reported>['next']) =>
+        JSON.parse(JSON.stringify(state));
+
+      it('keeps the rule for a date', () => {
+        const stored = viaRedis(reported().next);
+        expect(stored['int-1'].tokenExpiration).toBe(OLD_EXP);
+        const rename = diffChannels({
+          previous: stored,
+          channels: [renamed()],
+          now: NOW + 3600_000,
+        });
+        expect(rename.events).toEqual([]);
+        expect(rename.next).toEqual(stored);
+        const token = diffChannels({
+          previous: stored,
+          channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+          now: NOW + 3600_000,
+        });
+        expect(kinds(token.events)).toEqual(['channel.reconnected']);
+      });
+
+      it('keeps the rule for null', () => {
+        const stored = viaRedis(
+          reported(channel({ tokenExpiration: null })).next
+        );
+        // null stays in JSON, it is not dropped like undefined.
+        expect(stored['int-1']).toHaveProperty('tokenExpiration', null);
+        const rename = diffChannels({
+          previous: stored,
+          channels: [renamed({ tokenExpiration: null })],
+          now: NOW + 3600_000,
+        });
+        expect(rename.events).toEqual([]);
+        expect(rename.next).toEqual(stored);
+        const token = diffChannels({
+          previous: stored,
+          channels: [renamed({ tokenExpiration: new Date(NEW_EXP) })],
+          now: NOW + 3600_000,
+        });
+        expect(kinds(token.events)).toEqual(['channel.reconnected']);
+      });
+    });
+
+    it('closes it after a rename in the same run as a passed call', () => {
+      const first = reported();
+      const daily = diffChannels({
+        previous: first.next,
+        channels: [renamed()],
+        now: NOW + DAY,
+        authOk: ['int-1'],
+      });
+      expect(kinds(daily.events)).toEqual(['channel.reconnected']);
+      expect(daily.events[0].id).toBe(
+        `channel.reconnected:int-1:${RENAMED}-${NOW}`
+      );
+      expect(daily.next).toEqual({});
+    });
+
+    it('says nothing new for a rename while the platform still refuses', () => {
+      const first = reported();
+      const daily = diffChannels({
+        previous: first.next,
+        channels: [renamed()],
+        now: NOW + DAY,
+        authInvalid: { 'int-1': 'x' },
+      });
+      expect(daily.events).toEqual([]);
+      expect(daily.next).toEqual(first.next);
+    });
+
+    it('still reports a flag set after auth_invalid as disconnected', () => {
+      const first = reported();
+      const flagged = diffChannels({
+        previous: first.next,
+        channels: [renamed({ refreshNeeded: true })],
+        now: NOW + 3600_000,
+      });
+      expect(kinds(flagged.events)).toEqual(['channel.disconnected']);
+      expect(flagged.events[0].id).toBe(
+        `channel.disconnected:int-1:refresh_needed-${RENAMED}`
+      );
+      expect(flagged.next['int-1'].kind).toBe('channel.disconnected');
     });
   });
 

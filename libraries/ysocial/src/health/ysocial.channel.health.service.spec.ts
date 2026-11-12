@@ -1024,3 +1024,169 @@ describe('DailyHealth that saves after the events (V101)', () => {
     expect(stored(saved)['int-1']).toEqual(real);
   });
 });
+
+describe('"Zugang ungültig" ends only with a new token or a passed call', () => {
+  const AUTH_ERROR = new Error(
+    'Error validating access token: Session has expired'
+  );
+  const UPDATED = NOW.getTime() - DAY;
+  const EXPIRES = NOW.getTime() + 30 * DAY;
+  const renamedAt = new Date(NOW.getTime() + 1000);
+  const NEW_EXPIRES = new Date(NOW.getTime() + 60 * DAY);
+  const kinds = (events: { kind: string }[]) => events.map((e) => e.kind);
+
+  // What an earlier DailyHealth left in Redis for int-x.
+  const open = (patch: Record<string, unknown> = {}) => ({
+    'int-x': {
+      kind: 'channel.auth_invalid',
+      updatedAt: UPDATED,
+      since: '2026-10-26T06:00:00.000Z',
+      tokenExpiration: EXPIRES,
+      ...patch,
+    },
+  });
+
+  describe('hourly check', () => {
+    const hourly = async (after: ChannelRow) => {
+      const ctx = setup([row('int-x')], {});
+      ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify(open());
+      ctx.integrations.getChannels.mockResolvedValue([after]);
+      const result = await ctx.service.checkChannels(
+        new Date(NOW.getTime() + 3600_000)
+      );
+      return {
+        ...result,
+        state: JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]),
+      };
+    };
+
+    it('keeps a renamed channel open and the stored state as it was', async () => {
+      const { events, state } = await hourly(
+        row('int-x', { name: 'Y Social Umbenannt', updatedAt: renamedAt })
+      );
+      expect(events).toEqual([]);
+      expect(state).toEqual(open());
+    });
+
+    it('reports "wieder verbunden" for a new tokenExpiration', async () => {
+      const { events, state } = await hourly(
+        row('int-x', { updatedAt: renamedAt, tokenExpiration: NEW_EXPIRES })
+      );
+      expect(kinds(events)).toEqual(['channel.reconnected']);
+      expect(events[0].id).toBe(
+        `channel.reconnected:int-x:${renamedAt.getTime()}-${Date.parse(
+          '2026-10-26T06:00:00.000Z'
+        )}`
+      );
+      expect(state).toEqual({});
+    });
+  });
+
+  describe('DailyHealth with a change during the platform calls', () => {
+    const run = async (
+      method: 'runDailyHealth' | 'prepareDailyHealth',
+      after: ChannelRow,
+      analytics: jest.Mock
+    ) => {
+      const before = [row('int-x')];
+      const ctx = setup(before, { facebook: { analytics } });
+      ctx.integrations.getChannels
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce([after]);
+      ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY] = JSON.stringify(open());
+      const result = await ctx.service[method](NOW);
+      return { ...ctx, ...result };
+    };
+
+    for (const method of ['runDailyHealth', 'prepareDailyHealth'] as const) {
+      it(`${method}: a rename alone does not close it, the ok result expires`, async () => {
+        const analytics = jest.fn().mockResolvedValue([]);
+        const result = await run(
+          method,
+          row('int-x', { updatedAt: renamedAt }),
+          analytics
+        );
+        expect(analytics).toHaveBeenCalledTimes(1);
+        expect(kinds(result.events)).toEqual(['health.daily']);
+        expect(result.summary.authInvalid).toEqual(['int-x']);
+        if ('changes' in result) {
+          expect(result.changes).toEqual({});
+        } else {
+          expect(
+            JSON.parse(result.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])
+          ).toEqual(open());
+        }
+      });
+
+      it(`${method}: a new tokenExpiration in the second read closes it`, async () => {
+        const analytics = jest.fn().mockResolvedValue([]);
+        const result = await run(
+          method,
+          row('int-x', { updatedAt: renamedAt, tokenExpiration: NEW_EXPIRES }),
+          analytics
+        );
+        expect(kinds(result.events)).toEqual([
+          'channel.reconnected',
+          'health.daily',
+        ]);
+        expect(result.events[0].data).toEqual({
+          previous: 'channel.auth_invalid',
+        });
+        expect(result.summary.authInvalid).toEqual([]);
+        if ('changes' in result) {
+          expect((result.changes as any)['int-x'].after).toBeNull();
+        } else {
+          expect(
+            JSON.parse(result.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY])
+          ).toEqual({});
+        }
+      });
+    }
+  });
+
+  describe('a newly reported problem', () => {
+    const analytics = () => jest.fn().mockRejectedValue(AUTH_ERROR);
+
+    it('runDailyHealth stores tokenExpiration of the channel, not the token', async () => {
+      const ctx = setup([row('int-x')], {
+        facebook: { analytics: analytics() },
+      });
+      const { events } = await ctx.service.runDailyHealth(NOW);
+      expect(kinds(events)).toContain('channel.auth_invalid');
+
+      const stored = JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]);
+      expect(stored['int-x']).toMatchObject({
+        kind: 'channel.auth_invalid',
+        updatedAt: UPDATED,
+        tokenExpiration: EXPIRES,
+      });
+      expect(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]).not.toContain(TOKEN);
+      expect(JSON.stringify(events)).not.toContain(TOKEN);
+    });
+
+    it('stores null for a channel without tokenExpiration', async () => {
+      const ctx = setup([row('int-x', { tokenExpiration: null })], {
+        facebook: { analytics: analytics() },
+      });
+      await ctx.service.runDailyHealth(NOW);
+      const stored = JSON.parse(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]);
+      expect(stored['int-x']).toHaveProperty('tokenExpiration', null);
+    });
+
+    it('prepareDailyHealth puts tokenExpiration into changes, not the token', async () => {
+      const ctx = setup([row('int-x')], {
+        facebook: { analytics: analytics() },
+      });
+      const { events, changes } = await ctx.service.prepareDailyHealth(NOW);
+
+      expect(changes['int-x'].before).toBeNull();
+      expect(changes['int-x'].after).toMatchObject({
+        kind: 'channel.auth_invalid',
+        tokenExpiration: EXPIRES,
+      });
+      expect(JSON.stringify(changes)).not.toContain(TOKEN);
+      expect(JSON.stringify(events)).not.toContain(TOKEN);
+      expect(ctx.saved[YSOCIAL_CHANNEL_PROBLEMS_KEY]).toBeUndefined();
+    });
+  });
+});
