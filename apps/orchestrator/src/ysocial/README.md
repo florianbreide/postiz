@@ -396,7 +396,7 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
 - Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
 
-**Facebook** fehlt mit Absicht. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Der Postiz-Provider `facebook` fragt es nicht an (W10). `facebook.inbox.ts` kommt erst, wenn das Recht da ist: als Patch 4 nur mit Florians Zustimmung (E25), sonst in Phase 3.
+**Facebook** fehlt mit Absicht. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Seit PR 38 (Patch 4, E58) fragt der Postiz-Provider `facebook` es an, dazu `pages_manage_metadata` für Webhooks; Patch 5 tut dasselbe für `instagram`. Die Liste steht in `libraries/ysocial/src/scopes/meta.scopes.ts`, eine Zeile je Scope. Seiten, die vorher verbunden wurden, tragen die Rechte erst nach erneutem Verbinden. `facebook.inbox.ts` gibt es noch nicht. Ergibt die Probe aus postiz#15 (QA 10), dass Seiten-Kommentare ohne `pages_read_user_content` lesbar sind, fällt dessen Zeile in `meta.scopes.ts` weg.
 
 ## Ping von Hand (PR 16, QA 4)
 

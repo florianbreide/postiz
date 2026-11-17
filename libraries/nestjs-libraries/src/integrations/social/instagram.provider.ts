@@ -22,6 +22,8 @@ import { META_GRAPH_API_VERSION } from '@gitroom/nestjs-libraries/integrations/s
 import { Tool } from '@gitroom/nestjs-libraries/integrations/tool.decorator';
 import { DashboardFunction } from '@gitroom/nestjs-libraries/integrations/dashboard.function.decorator';
 import { hasExtension } from '@gitroom/helpers/utils/has.extension';
+// ysocial patch 5 (YSOCIAL-PATCHES.md)
+import { YSOCIAL_META_SCOPES } from '../../../../ysocial/src/scopes/meta.scopes';
 
 @Rules(
   "Instagram should have at least one attachment, if it's a story, it can have only one picture"
@@ -42,6 +44,8 @@ export class InstagramProvider
     'instagram_content_publish',
     'instagram_manage_comments',
     'instagram_manage_insights',
+    // ysocial patch 5 (YSOCIAL-PATCHES.md): inbox scopes
+    ...YSOCIAL_META_SCOPES,
   ];
   override maxConcurrentJob = 400;
   editor = 'normal' as const;

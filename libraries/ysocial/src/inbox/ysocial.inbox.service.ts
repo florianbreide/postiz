@@ -65,9 +65,10 @@ const countComments = (posts: InboxPost[]) =>
 export class YsocialInboxService {
   private readonly _logger = new Logger('ysocial');
 
-  // One inbox provider per Postiz provider identifier. Facebook is missing
-  // on purpose: reading Page comments needs pages_read_user_content, which
-  // the Postiz provider does not ask for (W10).
+  // One inbox provider per Postiz provider identifier. Facebook is still
+  // missing: reading Page comments needs pages_read_user_content. The Postiz
+  // provider asks for it since ysocial patch 4 (scopes/meta.scopes.ts), Pages
+  // connected before carry it only after they are connected again.
   protected providers: Record<string, YsocialInboxProvider> = {
     instagram: new InstagramInbox(),
   };
