@@ -1,5 +1,6 @@
 import {
   POST_FIELDS,
+  POST_QUERY_FIELDS,
   POSTS_LIMIT,
   READ_API_FORBIDDEN_FIELDS,
   YsocialReadRepository,
@@ -19,13 +20,13 @@ const setup = () => {
 };
 
 describe('YsocialReadRepository posts', () => {
-  it('getPost reads one post by id, never a deleted one, with POST_FIELDS', async () => {
+  it('getPost reads one post by id, never a deleted one, with POST_QUERY_FIELDS', async () => {
     const { repository, post } = setup();
     await repository.getPost('post-1');
     expect(post.findFirst).toHaveBeenCalledTimes(1);
     expect(post.findFirst.mock.calls[0][0]).toEqual({
       where: { id: 'post-1', deletedAt: null },
-      select: POST_FIELDS,
+      select: POST_QUERY_FIELDS,
     });
   });
 
@@ -39,7 +40,7 @@ describe('YsocialReadRepository posts', () => {
       group: 'g-1',
       deletedAt: null,
     });
-    expect(args.select).toBe(POST_FIELDS);
+    expect(args.select).toBe(POST_QUERY_FIELDS);
     expect(args.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
   });
 
@@ -50,7 +51,7 @@ describe('YsocialReadRepository posts', () => {
     await repository.getPosts(from, to);
     expect(post.findMany.mock.calls[0][0]).toEqual({
       where: { deletedAt: null, publishDate: { gte: from, lt: to } },
-      select: POST_FIELDS,
+      select: POST_QUERY_FIELDS,
       orderBy: { publishDate: 'asc' },
       take: POSTS_LIMIT,
     });
@@ -62,6 +63,39 @@ describe('YsocialReadRepository posts', () => {
     );
     for (const field of READ_API_FORBIDDEN_FIELDS) {
       expect(Object.keys(POST_FIELDS)).not.toContain(field);
+    }
+  });
+
+  it('POST_QUERY_FIELDS is POST_FIELDS plus exactly settings', () => {
+    expect({ ...POST_QUERY_FIELDS }).toEqual({
+      ...POST_FIELDS,
+      settings: true,
+    });
+    expect(Object.keys(POST_QUERY_FIELDS)).toEqual([
+      ...Object.keys(POST_FIELDS),
+      'settings',
+    ]);
+    expect(READ_API_FORBIDDEN_FIELDS).toContain('settings');
+    expect(Object.keys(POST_FIELDS)).not.toContain('settings');
+  });
+
+  it('all three post queries select settings, none of them a second forbidden field', async () => {
+    const { repository, post } = setup();
+    await repository.getPost('post-1');
+    await repository.getPostGroup('org-1', 'g-1');
+    await repository.getPosts(new Date(0), new Date(1));
+    const selects = [
+      post.findFirst.mock.calls[0][0].select,
+      ...post.findMany.mock.calls.map((call) => call[0].select),
+    ];
+    expect(selects).toHaveLength(3);
+    for (const select of selects) {
+      expect(select).toBe(POST_QUERY_FIELDS);
+      expect(
+        Object.keys(select).filter((field) =>
+          READ_API_FORBIDDEN_FIELDS.includes(field as any)
+        )
+      ).toEqual(['settings']);
     }
   });
 });

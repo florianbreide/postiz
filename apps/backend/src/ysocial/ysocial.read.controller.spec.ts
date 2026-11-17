@@ -16,6 +16,7 @@ import {
   CUSTOMER_FIELDS,
   INTEGRATION_FIELDS,
   POST_FIELDS,
+  POST_QUERY_FIELDS,
   READ_API_FORBIDDEN_FIELDS,
   YsocialReadRepository,
 } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
@@ -196,6 +197,22 @@ describe('read API field lists', () => {
   );
 });
 
+describe('POST_QUERY_FIELDS', () => {
+  it('is POST_FIELDS plus exactly settings, the only forbidden field it reads', () => {
+    expect(Object.keys(POST_QUERY_FIELDS)).toEqual([
+      ...Object.keys(POST_FIELDS),
+      'settings',
+    ]);
+    expect(
+      Object.keys(POST_QUERY_FIELDS).filter((field) =>
+        READ_API_FORBIDDEN_FIELDS.includes(field as any)
+      )
+    ).toEqual(['settings']);
+    expect(Object.keys(POST_FIELDS)).not.toContain('settings');
+    expect(READ_API_FORBIDDEN_FIELDS).toContain('settings');
+  });
+});
+
 describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
   const original = process.env[ENV];
   const repository = {
@@ -312,8 +329,9 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Object.keys(body[0]).sort()).toEqual(
-      Object.keys(POST_FIELDS).sort()
+      [...Object.keys(POST_FIELDS), 'plug'].sort()
     );
+    expect(body[0].plug).toBe(false);
     expect(body[0].content).toBe(postText);
     expect(body[0].image).toEqual(expectedMedia);
     expect(body[0].error).toBe(
@@ -330,8 +348,9 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Object.keys(body).sort()).toEqual(
-      [...Object.keys(POST_FIELDS), 'comments'].sort()
+      [...Object.keys(POST_FIELDS), 'plug', 'comments'].sort()
     );
+    expect(body.plug).toBe(false);
     expect(body).toMatchObject({
       id: 'post-1',
       parentPostId: null,
@@ -351,7 +370,9 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
       ['post-3', 'post-2', '<p>Erfundener Kommentar 2</p>', []],
     ]);
     for (const row of body.comments) {
-      expect(Object.keys(row).sort()).toEqual(Object.keys(POST_FIELDS).sort());
+      expect(Object.keys(row).sort()).toEqual(
+        [...Object.keys(POST_FIELDS), 'plug'].sort()
+      );
     }
     expect(repository.getPost).toHaveBeenCalledWith('post-1');
     expect(repository.getPostGroup).toHaveBeenCalledWith('org-1', 'g-1');
@@ -422,6 +443,163 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
         (row: { intervalInDays: unknown }) => row.intervalInDays
       )
     ).toEqual([7, 7]);
+  });
+
+  // plug mirrors PostsService.checkInternalPlug: a key with "plug-" whose
+  // third part after split('--') is "integrations", holding a filled array.
+  describe('plug', () => {
+    const channels = [{ id: 'x' }];
+    const plugOf = async (settings: string | null) => {
+      repository.getPost.mockResolvedValueOnce({ ...postRow, settings });
+      repository.getPostGroup.mockResolvedValueOnce([]);
+      const res = await get('/ysocial/posts/post-1');
+      expect(res.status).toBe(200);
+      return (await res.json()).plug;
+    };
+
+    it.each([
+      [
+        'a filled integrations array',
+        JSON.stringify({ 'plug--autoRepostPost--integrations': channels }),
+      ],
+      [
+        'with plug--x--active false beside it, Postiz ignores active',
+        JSON.stringify({
+          'plug--autoRepostPost--integrations': channels,
+          'plug--autoRepostPost--active': false,
+        }),
+      ],
+      [
+        'a key with plug- elsewhere in it and integrations as third part',
+        JSON.stringify({ 'x-plug-y--z--integrations': channels }),
+      ],
+      [
+        'several plugs, one of them with a channel',
+        JSON.stringify({
+          'plug--a--integrations': [],
+          'plug--a--delay': '5',
+          'plug--b--integrations': channels,
+        }),
+      ],
+      [
+        'among other settings',
+        JSON.stringify({
+          post_type: 'post',
+          'plug--autoRepostPost--integrations': channels,
+        }),
+      ],
+    ])('is true for %s', async (_name, settings) => {
+      expect(await plugOf(settings)).toBe(true);
+    });
+
+    it.each([
+      ['an empty array', { 'plug--a--integrations': [] }],
+      ['no plug key', { post_type: 'post' }],
+      ['another third part', { 'plug--x--delay': channels }],
+      ['active only', { 'plug--x--active': true }],
+      ['a string as integrations', { 'plug--a--integrations': 'x' }],
+      ['an object as integrations', { 'plug--a--integrations': { id: 'x' } }],
+      ['null as integrations', { 'plug--a--integrations': null }],
+      ['integrations without plug-', { 'a--b--integrations': channels }],
+      ['integrations as second part', { 'plug--integrations': channels }],
+      [
+        'several plugs, none with a channel',
+        {
+          'plug--a--integrations': [],
+          'plug--b--delay': '1',
+        },
+      ],
+    ])('is false for %s', async (_name, settings) => {
+      expect(await plugOf(JSON.stringify(settings))).toBe(false);
+    });
+
+    it.each([
+      ['null', null],
+      ['an empty string', ''],
+      ['broken JSON', '{"plug--a--integrations":[{"id":"x"}'],
+      ['a JSON array', '[{"plug--a--integrations":[{"id":"x"}]}]'],
+      ['the string "null"', 'null'],
+      ['a JSON string', '"plug--a--integrations"'],
+      ['a JSON number', '42'],
+      ['an empty object', '{}'],
+    ])('is false for settings that are %s', async (_name, settings) => {
+      expect(await plugOf(settings)).toBe(false);
+    });
+
+    // Raw JSON strings on purpose: an object literal with __proto__ would
+    // not create the key.
+    it.each([
+      [
+        'the third part',
+        '{"plug--x--__proto__":{"integrations":[{"id":"a"}]}}',
+      ],
+      ['the second part', '{"plug--__proto__--integrations":[{"id":"a"}]}'],
+      [
+        'the second part with another third part',
+        '{"plug--__proto__--delay":"1"}',
+      ],
+    ])('is true when a part named __proto__ is %s', async (_name, settings) => {
+      expect(await plugOf(settings)).toBe(true);
+      expect(({} as Record<string, unknown>).integrations).toBeUndefined();
+      expect(({} as Record<string, unknown>).delay).toBeUndefined();
+      expect(Object.keys(Object.prototype)).toEqual([]);
+    });
+
+    it('is false for a part named __proto__ in a key without plug-', async () => {
+      expect(await plugOf('{"a--__proto__--integrations":[1]}')).toBe(false);
+      expect(({} as Record<string, unknown>).integrations).toBeUndefined();
+      expect(Object.keys(Object.prototype)).toEqual([]);
+    });
+
+    it('lists and comments carry plug per row, never settings', async () => {
+      const settings = JSON.stringify({
+        'plug--erfundenPlug--integrations': [{ id: 'erfunden-kanal-1' }],
+        'plug--erfundenPlug--delay': 'erfundene-verzoegerung',
+        'plug--erfundenPlug--post': 'erfundener-plug-text',
+      });
+      repository.getPosts.mockResolvedValueOnce([
+        { ...postRow, settings },
+        { ...postRow, id: 'post-5', settings: '{}' },
+      ]);
+      const list = await (
+        await get(
+          '/ysocial/posts?from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z'
+        )
+      ).text();
+      const rows = JSON.parse(list);
+      expect(rows.map((row: { plug: boolean }) => row.plug)).toEqual([
+        true,
+        false,
+      ]);
+
+      repository.getPost.mockResolvedValueOnce({ ...postRow, settings });
+      repository.getPostGroup.mockResolvedValueOnce([
+        { ...postRow, settings },
+        { ...comment1, settings },
+        { ...comment2, settings: '{}' },
+      ]);
+      const one = await (await get('/ysocial/posts/post-1')).text();
+      const body = JSON.parse(one);
+      expect(body.plug).toBe(true);
+      expect(body.comments.map((row: { plug: boolean }) => row.plug)).toEqual([
+        true,
+        false,
+      ]);
+
+      for (const text of [list, one]) {
+        expect(text).not.toContain('"settings"');
+        for (const part of [
+          'plug--',
+          'erfundenPlug',
+          'erfunden-kanal-1',
+          'erfundene-verzoegerung',
+          'erfundener-plug-text',
+          'post_type',
+        ]) {
+          expect(text).not.toContain(part);
+        }
+      }
+    });
   });
 
   it('no route ever answers with a forbidden field or a secret value', async () => {
