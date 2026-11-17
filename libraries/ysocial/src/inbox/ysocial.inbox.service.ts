@@ -67,8 +67,8 @@ export class YsocialInboxService {
 
   // One inbox provider per Postiz provider identifier. Facebook is still
   // missing: reading Page comments needs pages_read_user_content. The Postiz
-  // provider asks for it since ysocial patch 4 (scopes/meta.scopes.ts), Pages
-  // connected before carry it only after they are connected again.
+  // provider asks for the scopes in scopes/meta.scopes.ts (ysocial patch 4),
+  // Pages connected before carry them only after they are connected again.
   protected providers: Record<string, YsocialInboxProvider> = {
     instagram: new InstagramInbox(),
   };

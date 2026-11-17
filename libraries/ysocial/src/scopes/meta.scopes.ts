@@ -20,8 +20,12 @@
  * Channels connected before a change of this list keep their token. They
  * carry a new scope only after they are connected again.
  *
- * pages_read_user_content: the Facebook probe of postiz#15 (QA 10) is still
- * open. If Page comments are readable without it, delete its line.
+ * pages_read_user_content: delete its line only if the Facebook probe of
+ * postiz#15 (QA 10) reads Page comments without it and App Review does not
+ * ask for it as a dependency of instagram_basic or pages_manage_engagement
+ * (Hub meta.md 2.5, checklist step 11). If Meta refuses Advanced Access for
+ * a scope here, its line has to go as well: otherwise nobody without a role
+ * in the app can connect Facebook or Instagram.
  */
 export const YSOCIAL_META_SCOPES = [
   'pages_read_user_content', // comments of other people on a Page

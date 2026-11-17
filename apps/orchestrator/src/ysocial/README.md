@@ -384,7 +384,7 @@ Im Log steht je Aufruf nur, was eine Prüfung bestanden hat, die Person und Zahl
 | `POST /{ig-comment-id}/replies` | `instagram_basic`, `instagram_manage_comments`, `pages_show_list`, `pages_read_engagement` |
 | `POST /{ig-comment-id}` mit `hide`, `DELETE /{ig-comment-id}` | `instagram_basic`, `instagram_manage_comments`, `pages_read_engagement`. Nur der Besitzer des Beitrags |
 
-Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.provider.ts`, `scopes`), es braucht keinen Patch.
+Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.provider.ts`, `scopes`). Für diese Aufrufe braucht es keinen Patch. Patch 5 hängt nur die Liste aus `libraries/ysocial/src/scopes/meta.scopes.ts` an, die diese Aufrufe nicht brauchen.
 
 **Grenzen laut Meta**
 - Antworten nur auf Kommentare der obersten Ebene. Eine Antwort auf eine Antwort hängt Meta an den Kommentar darüber. Keine Antwort auf verborgene Kommentare und unter Live-Videos.
@@ -396,7 +396,7 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
 - Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
 
-**Facebook** fehlt mit Absicht. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Seit PR 38 (Patch 4, E58) fragt der Postiz-Provider `facebook` es an, dazu `pages_manage_metadata` für Webhooks; Patch 5 tut dasselbe für `instagram`. Die Liste steht in `libraries/ysocial/src/scopes/meta.scopes.ts`, eine Zeile je Scope. Seiten, die vorher verbunden wurden, tragen die Rechte erst nach erneutem Verbinden. `facebook.inbox.ts` gibt es noch nicht. Ergibt die Probe aus postiz#15 (QA 10), dass Seiten-Kommentare ohne `pages_read_user_content` lesbar sind, fällt dessen Zeile in `meta.scopes.ts` weg.
+**Facebook** fehlt noch. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Seit PR 38 (E58) hängen Patch 4 und 5 die Liste aus `libraries/ysocial/src/scopes/meta.scopes.ts` an die Scopes von `facebook` und `instagram`, eine Zeile je Scope. Was dort steht, fragt Postiz beim Verbinden an und verlangt es (`checkScopes`). Seiten, die vorher verbunden wurden, tragen neue Rechte erst nach erneutem Verbinden. `facebook.inbox.ts` gibt es noch nicht. Wann eine Zeile wegfällt, steht im Kopf von `meta.scopes.ts`.
 
 ## Ping von Hand (PR 16, QA 4)
 
