@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
@@ -26,5 +26,11 @@ export class YsocialReadController {
   @Get('/posts')
   getPosts(@Query() query: YsocialPostsQueryDto) {
     return this._readService.getPosts(query.from, query.to);
+  }
+
+  // The post with the comments of its thread (PLAN 3.3 PR 36).
+  @Get('/posts/:id')
+  getPost(@Param('id') id: string) {
+    return this._readService.getPost(id);
   }
 }

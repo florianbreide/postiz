@@ -207,7 +207,7 @@ Ergebnis, nur Zahlen: `{"token":{"encrypted":…,"changedMeanwhile":…,"remaini
 - Die Fluent-API von Prisma (`post.findUnique().integration()`) gibt die Chiffre zurück, Raw-Queries gehen an der Erweiterung vorbei. Postiz nutzt beides nicht. `ysocial.token.bypass.spec.ts` prüft die Quellen bei jedem PR.
 - Ein Schlüsselwechsel (Rotation) gehört nicht zu PR 25.
 
-## Lese-API für den Hub (Backend, PR 18)
+## Lese-API für den Hub (Backend, PR 18, Inhalt seit PR 36)
 
 Hinter `YsocialTokenGuard` wie `/ysocial/status`, von außen gesperrt (`/api/ysocial/*`):
 
@@ -215,9 +215,16 @@ Hinter `YsocialTokenGuard` wie `/ysocial/status`, von außen gesperrt (`/api/yso
 |---|---|
 | `GET /ysocial/customers` | Postiz-Customers ohne gelöschte: `id`, `orgId`, `name`, `createdAt`, `updatedAt` |
 | `GET /ysocial/integrations` | Kanäle ohne gelöschte: `id`, `organizationId`, `customerId`, `name`, `customName`, `picture`, `profile`, `providerIdentifier`, `type`, `disabled`, `refreshNeeded`, `inBetweenSteps`, `tokenExpiration`, `createdAt`, `updatedAt`, dazu `status` (`ok`, `refresh_needed`, `in_between_steps`, `disabled`) |
-| `GET /ysocial/posts?from=&to=` | Posts ohne gelöschte mit Termin ab `from` bis vor `to` (ISO 8601, höchstens 31 Tage, höchstens 2000 Posts): `id`, `organizationId`, `integrationId`, `group`, `parentPostId`, `state`, `publishDate`, `releaseURL`, `error` (bereinigt), `createdAt`, `updatedAt` |
+| `GET /ysocial/posts?from=&to=` | Posts ohne gelöschte mit Termin ab `from` bis vor `to` (ISO 8601, höchstens 31 Tage, höchstens 2000 Posts): `id`, `organizationId`, `integrationId`, `group`, `parentPostId`, `state`, `publishDate`, `content`, `image`, `releaseURL`, `error` (bereinigt), `createdAt`, `updatedAt`. Kommentare eines Threads stehen als eigene Zeilen mit `parentPostId` darin |
+| `GET /ysocial/posts/:id` | Ein Post ohne gelöschte mit denselben Feldern, dazu `comments`: die Kommentare seines Threads in Reihenfolge, je mit denselben Feldern. 404 `{"statusCode":404,"code":"not_found"}`, wenn es den Post nicht gibt oder er gelöscht ist |
 
-Nie dabei: `token`, `refreshToken`, `customInstanceDetails`, `settings`, `additionalSettings`, `internalId`, Posttext (`content`) und Medien (`image`). Die Feldlisten stehen in `libraries/ysocial/src/database/ysocial.read.repository.ts`. Posttext und Medien für die Vorschau in PR 23 sind eine eigene Entscheidung.
+Posttext und Medien seit PR 36 (E52), nur für `hub-web` im Docker-Netz:
+- `content` ist der Text, wie Postiz ihn speichert, meist HTML aus dem Editor. Postiz wandelt ihn erst beim Posten je Plattform um (`stripHtmlValidation`) und entfernt Links bei manchen Plattformen schon beim Speichern.
+- `image` ist eine Liste `[{"path":"…","type":"image"|"video"}]`, leer ohne Medien. `path` ist die gespeicherte Adresse der Datei. Postiz speichert keinen Typ am Post. `video` heißt wie bei Postiz (`VideoOrImage`, die Provider): Der Pfad enthält `.mp4`. Alles andere gilt als `image`. Weitere Felder der Medien (`id`, `alt`, `thumbnail`) gehen nicht raus.
+
+Kommentare eines Threads: Postiz legt je Kanal eine Gruppe an (`PostsRepository.createOrUpdatePost`). Der erste Wert im Editor ist der Post, jeder weitere ein eigener Post derselben Gruppe mit `parentPostId` auf den vorigen. Der Workflow veröffentlicht den ersten Post und die weiteren danach über `comment()` des Providers, je nach Plattform als Antwort im Thread (X, Threads, Bluesky) oder als Kommentar (Facebook, Instagram, LinkedIn). `GET /ysocial/posts/:id` liest die Gruppe und folgt der Kette wie `PostsService.getPostsRecursively` vom angefragten Post nach unten. Bei der ID eines Kommentars kommen also dieser und die nach ihm. Nicht gemeint sind die Kommentare im Postiz-Editor (Tabelle `Comments`, Notizen des Teams am Post). Die liest die Lese-API nicht.
+
+Nie dabei: `token`, `refreshToken`, `customInstanceDetails`, `settings`, `additionalSettings`, `internalId`. Die Feldlisten stehen in `libraries/ysocial/src/database/ysocial.read.repository.ts`, der Test in `apps/backend/src/ysocial/ysocial.read.controller.spec.ts` nennt jede Liste vollständig. Ein neues Feld lässt ihn scheitern. Die Lese-API schreibt nichts ins Log, also auch keinen Posttext.
 
 ## Erneut versuchen (Backend, PR 19)
 
