@@ -376,6 +376,17 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(repository.getPostGroup).not.toHaveBeenCalled();
   });
 
+  // The read route has one segment after /posts, the retry route two.
+  it('posts/:id does not collide with posts/:id/retry', async () => {
+    expect((await get('/ysocial/posts/post-1/retry')).status).toBe(404);
+    const res = await fetch(`${baseUrl}/ysocial/posts/post-1`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(404);
+    expect(repository.getPost).not.toHaveBeenCalled();
+  });
+
   it('no route ever answers with a forbidden field or a secret value', async () => {
     for (const path of routes) {
       const text = await (await get(path)).text();
@@ -495,5 +506,42 @@ describe('media of a post', () => {
       { path: 'https://uploads.example.com/a.PNG', type: 'image' },
       { path: 'https://uploads.example.com/b.MP4', type: 'video' },
     ]);
+  });
+});
+
+describe('thread order of the comments', () => {
+  const thread = async (group: Array<Record<string, unknown>>) => {
+    const service = new YsocialReadService({
+      getPost: jest.fn().mockResolvedValue(postRow),
+      getPostGroup: jest.fn().mockResolvedValue(group),
+    } as unknown as YsocialReadRepository);
+    const body = await service.getPost('post-1');
+    return body.comments.map((row) => row.id);
+  };
+
+  it('ends on a cycle instead of hanging', async () => {
+    const a = comment('post-2', 'post-3', 'a');
+    const b = comment('post-3', 'post-2', 'b');
+    // post-1 -> post-2 -> post-3 -> post-2 ...
+    expect(
+      await thread([postRow, { ...a, parentPostId: 'post-1' }, b])
+    ).toEqual(['post-2', 'post-3']);
+  });
+
+  it('ends when a comment points at the post itself', async () => {
+    expect(
+      await thread([postRow, comment('post-2', 'post-2', 'self')])
+    ).toEqual([]);
+  });
+
+  it('ends with two comments on the same parent and lists no comment twice', async () => {
+    const ids = await thread([
+      postRow,
+      comment('post-2', 'post-1', 'first'),
+      comment('post-3', 'post-1', 'second'),
+      comment('post-4', 'post-3', 'third'),
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBeGreaterThan(0);
   });
 });
