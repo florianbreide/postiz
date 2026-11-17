@@ -53,7 +53,7 @@ describe('inbox demo and automation (rule 2)', () => {
     expect(risky.length).toBeGreaterThan(0);
     for (const file of risky) {
       const source = read(file);
-      expect(source).not.toMatch(/\.(reply|hide|remove)\(/);
+      expect(source).not.toMatch(/\.(reply|hide|remove|subscribeWebhooks)\(/);
     }
   });
 
@@ -94,14 +94,73 @@ describe('inbox demo and automation (rule 2)', () => {
     expect(module).not.toMatch(/_?inboxService\./);
   });
 
-  it('calls reply, hide and remove of the service only in the controller', () => {
+  it('calls reply, hide, remove and subscribeWebhooks of the service only in the controller', () => {
     const callers = sourceFiles(join(ROOT, 'apps'))
       .concat(sourceFiles(join(ROOT, 'libraries')))
-      .filter((file) => /inboxService\.(reply|hide|remove)\(/.test(read(file)))
+      .filter((file) =>
+        /inboxService\.(reply|hide|remove|subscribeWebhooks)\(/.test(read(file))
+      )
       .map((file) => rel(file));
     expect(callers).toEqual([
       'apps/backend/src/ysocial/ysocial.inbox.controller.ts',
     ]);
+  });
+
+  // The receiver of the Meta webhooks (PR B) only logs. It must not answer,
+  // hide or delete on its own, nor call Meta at all.
+  it('lets the webhook receiver write to no platform', () => {
+    const receiver = [
+      ...sourceFiles(join(YSOCIAL_LIBRARY, 'webhooks')),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.controller.ts'),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.guard.ts'),
+    ];
+    expect(receiver.map(rel)).toEqual(
+      expect.arrayContaining([
+        'libraries/ysocial/src/webhooks/ysocial.meta.webhook.service.ts',
+        'apps/backend/src/ysocial/ysocial.meta.webhook.controller.ts',
+      ])
+    );
+    for (const file of receiver) {
+      const source = read(file);
+      expect(source).not.toMatch(/inbox\/|InboxService|InboxProvider/);
+      expect(source).not.toMatch(/metaGraph|graph\.facebook\.com|fetch\(/);
+      expect(source).not.toMatch(/\.(reply|hide|remove|subscribeWebhooks)\(/);
+    }
+  });
+
+  // Allowlist instead of a blocklist: a new import in the receiver (Temporal,
+  // an event to the hub, an HTTP client) has to be added here on purpose,
+  // with a review. The demo guard only reads YSOCIAL_DEMO_INTEGRATIONS.
+  it('lets the webhook receiver import only what it needs', () => {
+    const ALLOWED_IMPORTS = [
+      'crypto',
+      'express',
+      '@nestjs/common',
+      '@nestjs/swagger',
+      '@gitroom/nestjs-libraries/redis/redis.service',
+      '../service.token',
+      './webhook.rules',
+      './ysocial.inbox.demo.guard',
+      './ysocial.meta.webhook.guard',
+      '../../../../libraries/ysocial/src/webhooks/webhook.rules',
+      '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service',
+    ];
+    const receiver = [
+      ...sourceFiles(join(YSOCIAL_LIBRARY, 'webhooks')),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.controller.ts'),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.guard.ts'),
+    ];
+    const imports = receiver.flatMap((file) =>
+      [
+        ...read(file).matchAll(
+          /(?:from|import\(|require\()\s*['"]([^'"]+)['"]/g
+        ),
+      ].map((match) => match[1])
+    );
+    expect(imports.length).toBeGreaterThan(5);
+    expect(imports.filter((name) => !ALLOWED_IMPORTS.includes(name))).toEqual(
+      []
+    );
   });
 
   // Tripwire: whoever imports the inbox provider or service anywhere in

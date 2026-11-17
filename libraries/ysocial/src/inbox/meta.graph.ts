@@ -71,8 +71,8 @@ export const metaGraph = async (
   return body || {};
 };
 
-// Hide, unhide and delete answer {"success": true}. Anything else counts as
-// a refusal.
+// Hide, unhide, delete and the webhook subscription answer
+// {"success": true}. Anything else counts as a refusal.
 export const expectSuccess = (result: GraphObject) => {
   if (result?.success !== true) {
     throw new InboxPlatformError({
@@ -81,4 +81,71 @@ export const expectSuccess = (result: GraphObject) => {
       reason: 'Die Plattform hat den Erfolg nicht bestätigt.',
     });
   }
+};
+
+/**
+ * Webhooks of a Page for the demo: our app on the Page and its fields.
+ * Facebook calls this for the Page of the channel, Instagram (Facebook
+ * Login) for the linked Page through "me" with the Page token.
+ *
+ * - POST /{page-id}/subscribed_apps with subscribed_fields, GET for the
+ *   state: Page token of a person with the task CREATE_CONTENT, MANAGE or
+ *   MODERATE, pages_manage_metadata and pages_show_list. POST answers
+ *   {"success": true}, GET the apps on the Page with subscribed_fields.
+ *   https://developers.facebook.com/docs/graph-api/reference/page/subscribed_apps
+ * - Instagram, Facebook Login: "Send a POST request to the linked Page's
+ *   /subscribed_apps edge", "You can use /me when the token represents the
+ *   linked Facebook Page". The same guide wants "the fields selected in the
+ *   App Dashboard", while the subscribed_apps reference says: "You cannot
+ *   use the subscribed_fields parameter to configure or subscribe to
+ *   Webhooks for Instagram." So the Page field feed for the linked Page is
+ *   an assumption (README, ungeprüft). comments is set in the App Dashboard.
+ *   https://developers.facebook.com/documentation/instagram-platform/webhooks/setup
+ */
+
+// The Page field the demo subscribes: posts, comments and reactions of the
+// Page.
+export const PAGE_WEBHOOK_FIELDS = ['feed'];
+
+// The app Postiz uses for Facebook Login. Its webhooks Meta signs with
+// FACEBOOK_APP_SECRET.
+export const META_APP_ID_ENV = 'FACEBOOK_APP_ID';
+
+export const subscribePageWebhooks = async (
+  accessToken: string,
+  node: string
+) => {
+  expectSuccess(
+    await metaGraph('POST', accessToken, `${node}/subscribed_apps`, {
+      subscribed_fields: PAGE_WEBHOOK_FIELDS.join(','),
+    })
+  );
+  return { fields: PAGE_WEBHOOK_FIELDS };
+};
+
+// Only the entry of our own app counts. Names and ids of other apps on the
+// Page never leave this function. Without FACEBOOK_APP_ID: not subscribed.
+export const pageWebhookSubscription = async (
+  accessToken: string,
+  node: string
+) => {
+  const appId = process.env[META_APP_ID_ENV];
+  const result = await metaGraph(
+    'GET',
+    accessToken,
+    `${node}/subscribed_apps`,
+    {}
+  );
+  const app = Array.isArray(result?.data)
+    ? result.data.find(
+        (row: GraphObject) => !!appId && String(row?.id) === appId
+      )
+    : undefined;
+  const fields: string[] = Array.isArray(app?.subscribed_fields)
+    ? app.subscribed_fields.filter(
+        (field: unknown) =>
+          typeof field === 'string' && /^[a-z_]{1,40}$/.test(field)
+      )
+    : [];
+  return { subscribed: !!app, fields };
 };

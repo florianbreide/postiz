@@ -12,6 +12,8 @@ import {
   expectSuccess,
   GraphObject,
   metaGraph,
+  pageWebhookSubscription,
+  subscribePageWebhooks,
   text,
 } from './meta.graph';
 
@@ -102,14 +104,17 @@ export class FacebookInbox implements YsocialInboxProvider {
   identifier = 'facebook';
 
   async listComments(channel: InboxChannel): Promise<InboxPost[]> {
-    if (!isPageId(channel.internalId)) {
-      throw new Error('ysocial inbox: invalid platform id');
-    }
     const posts = rows(
-      await this.graph('GET', channel, channel.internalId, 'published_posts', {
-        fields: POST_FIELDS,
-        limit: String(INBOX_POSTS_LIMIT),
-      })
+      await this.graph(
+        'GET',
+        channel,
+        this.pageId(channel),
+        'published_posts',
+        {
+          fields: POST_FIELDS,
+          limit: String(INBOX_POSTS_LIMIT),
+        }
+      )
     );
 
     return Promise.all(
@@ -171,6 +176,22 @@ export class FacebookInbox implements YsocialInboxProvider {
     expectSuccess(
       await this.graph('DELETE', channel, commentId, undefined, {})
     );
+  }
+
+  // The Page of the channel itself (meta.graph.ts).
+  async webhookSubscription(channel: InboxChannel) {
+    return pageWebhookSubscription(channel.token, this.pageId(channel));
+  }
+
+  async subscribeWebhooks(channel: InboxChannel) {
+    return subscribePageWebhooks(channel.token, this.pageId(channel));
+  }
+
+  private pageId(channel: InboxChannel) {
+    if (!isPageId(channel.internalId)) {
+      throw new Error('ysocial inbox: invalid platform id');
+    }
+    return channel.internalId;
   }
 
   private async graph(

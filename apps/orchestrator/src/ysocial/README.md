@@ -414,7 +414,7 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - `owner` gibt Meta nur zurück, wenn „the app user making the query also created the media“. Ob das mit dem Page-Token gilt, ist **ungeprüft**. Gilt es nicht, enden alle schreibenden Aufrufe mit 404 `comment_not_found`, ohne etwas zu ändern (fail-closed). PLAN QA 2 auf Staging zeigt es.
 - Je Kommentar liest die Demo nur die erste Seite der Antworten in der Standardgröße von Meta.
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
-- Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
+- Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf. Anmelden und Empfang ab 0.9.1 im Abschnitt „Webhooks für die Inbox-Demo“ unten.
 
 **Facebook** (ab 0.9.0): `libraries/ysocial/src/inbox/facebook.inbox.ts`. Eine Erweiterung der Demo nach E25, kein Produktcode für Phase 3. Anlass: Florian hat am 17.11.2026 entschieden, `pages_read_user_content` und `pages_manage_metadata` in den Meta-Antrag aufzunehmen (Weg 1, postiz#25). Meta verlangt für jedes Recht ein Video, das die Nutzung in der App zeigt. Dieser Teil liefert die Facebook-Kommentare für die Videos zu `pages_read_user_content` und `pages_manage_engagement` (Welle 2, Hub `meta.md` §6). Endpunkte und Rechte laut offizieller Meta-Referenz (gelesen am 17.11.2026, Links im Kopf der Datei):
 
@@ -437,6 +437,63 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - Ob `from.name` bei Personen ohne Rolle in der App mit Standard Access kommt, ist **ungeprüft** (`meta.md` 4, „Business Asset User Profile Access“). Fehlt es, steht `username` auf `null`.
 - `order=reverse_chronological` steht in der Referenz als Wert von `summary.order`. Ohne Wirkung kämen die ältesten 50 Kommentare. Für die Aufnahmen mit wenigen Kommentaren spielt das keine Rolle.
 - Ohne Posttext wie bei Instagram. Den Bezug zum Post zeigt der Link `permalink`.
+
+## Webhooks für die Inbox-Demo (Backend, ab 0.9.1, nur Staging)
+
+Für die Videos zu `pages_manage_metadata` und den Webhook-Feldern `feed` (Seite) und `comments` (Instagram), Hub `meta.md` §6. Drei Teile: die Seite eines Demo-Kanals für Webhooks anmelden, Ereignisse von Meta empfangen, die letzten Ereignisse als Protokoll lesen. Ein Webhook löst nichts aus: keine Antwort, kein Ticket, kein Aufruf bei Meta (Regel 2). Den Text eines Kommentars liest die Demo über die Leseroute oben nach.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_DEMO_INTEGRATIONS` | wie oben. Ohne sie gibt es auch den Empfänger nicht (404) |
+| `YSOCIAL_META_WEBHOOK_VERIFY_TOKEN` | neu. Zufallswert, mindestens 32 Zeichen, zum Beispiel `openssl rand -hex 32`. Derselbe Wert steht im App-Dashboard als „Verify Token“. Fehlt er oder ist er kürzer: Der Empfänger beantwortet die Prüfung von Meta mit 503 |
+| `FACEBOOK_APP_SECRET` | gibt es schon, Postiz braucht es für Facebook Login. Meta signiert die Webhooks der App damit. Fehlt es: Jedes Ereignis bekommt 503 |
+| `FACEBOOK_APP_ID` | gibt es schon. Daran erkennt die Leseroute unsere App unter den Apps der Seite |
+
+**Seite anmelden und Stand lesen** (hinter `YsocialInboxDemoGuard` und `YsocialTokenGuard`, Kanal aus `YSOCIAL_DEMO_INTEGRATIONS`, dieselben Prüfungen wie die Inbox-Routen):
+
+| Route | Wirkung |
+|---|---|
+| `GET /ysocial/inbox/integrations/:id/webhooks` | Ist unsere App auf der Seite? 200 `{"integrationId":"…","provider":"facebook","subscribed":true,"fields":["feed"]}`. Nur der Eintrag unserer App (`FACEBOOK_APP_ID`), nie Namen oder IDs anderer Apps der Seite |
+| `POST /ysocial/inbox/integrations/:id/webhooks` | Meldet die Seite mit dem Feld `feed` an. Ohne Body, mit `X-Ysocial-Actor` wie die anderen schreibenden Routen. 200 `{"integrationId":"…","provider":"…","subscribed":true,"fields":["feed"]}` |
+| `GET /ysocial/inbox/webhooks/events` | Die letzten Ereignisse, neueste zuerst: `{"events":[…],"limit":50,"ttlSeconds":86400}`. Ist Redis nicht erreichbar: 503 `store_unavailable` |
+
+- Facebook: `POST /{page-id}/subscribed_apps` mit `subscribed_fields=feed`, `GET` derselben Kante für den Stand. Rechte laut Referenz: Page-Token einer Person mit Aufgabe CREATE_CONTENT, MANAGE oder MODERATE, `pages_manage_metadata` und `pages_show_list`. Antwort `{"success": true}`. Die Einstellungen der Seite ändern sich dabei nicht.
+- Instagram (Facebook Login): Kommentar-Webhooks kommen über die verknüpfte Seite. Die Route meldet die verknüpfte Seite mit `feed` an, mit dem Page-Token über `/me`. `comments` wählst du im App-Dashboard. Rechte laut Meta für `comments`: `instagram_basic`, `instagram_manage_comments`, `pages_manage_metadata`, `pages_read_engagement`, `pages_show_list`. Dazu kommen Advanced Access, App auf Live und ein öffentliches Instagram-Konto. Meta widerspricht sich bei diesem Schritt, deshalb ist `feed` hier eine **Annahme**:
+  - Der Instagram-Leitfaden „Set up Instagram Webhooks“ (Abschnitt Facebook credentials) sagt: „Send a `POST` request to the linked Page's `/subscribed_apps` edge.“ und „You can use `/me` when the token represents the linked Facebook Page.“ Den Weg über `/me` belegt das. Derselbe Abschnitt verlangt aber: „Set `<WEBHOOK_FIELDS>` to the fields selected in the App Dashboard.“
+  - Die Referenz von `subscribed_apps` sagt: „You cannot use the subscribed_fields parameter to configure or subscribe to Webhooks for Instagram. You must use your app dashboard to subscribe to Instagram Webhooks.“ Instagram-Felder wie `comments` stehen auch nicht in der Liste erlaubter Werte.
+  - Die Route schickt deshalb das Seitenfeld `feed`, damit unsere App auf der verknüpften Seite ist. Ob Meta damit Instagram-Kommentare zustellt und ob ein `POST` die Feldliste ersetzt oder ergänzt, sagt keine der beiden Seiten. **Ungeprüft**. Vor Advanced Access lässt sich nur prüfen, ob `GET …/webhooks` danach `"subscribed":true` zeigt.
+- Antworten und Fehler wie bei den Inbox-Routen: 400 `actor_missing`, 403 `not_demo_integration`, 404 `not_found`, 409 `channel_inactive` oder `provider_not_supported`, 502 `platform_error`, 503 `platform_unavailable`. Beim Anmelden 503 `outcome_unknown`, wenn Meta keine klare Antwort gibt. Ein zweiter Versuch schadet nicht, das Anmelden ist idempotent.
+- Log: `inbox webhooks channel=<id> result=ok subscribed=<true|false> fields=<…>` und `inbox subscribe channel=<id> actor=<…> result=<done|rejected code=…>`.
+
+**Empfänger** (für Meta, öffentlich): `GET` und `POST /ysocial-meta-webhook`, von außen `https://<Postiz-Host>/api/ysocial-meta-webhook`. Der Pfad liegt bewusst außerhalb von `/ysocial/`, denn der Reverse Proxy sperrt `/api/ysocial/*` nach außen. Er enthält kein `/auth`. Die Basic Auth von Staging braucht eine Ausnahme genau für diesen Pfad, verankert und mit Schreibweise wie hier, im Caddyfile des Hubs etwa `@needs_auth not path_regexp ^/(uploads|integrations/social)/|^/api/ysocial-meta-webhook$`. Express leitet auch `/api/YSOCIAL-META-WEBHOOK` und `/api/ysocial-meta-webhook/` auf den Empfänger. Mit dem verankerten Ausdruck bleiben diese Varianten hinter der Basic Auth. Die Sperre `(?i)^/api/ysocial(/|$)` trifft den Pfad nicht, denn auf `ysocial` folgt `-`. Auf Prod gibt es den Empfänger nicht (404 ohne Demo-Liste).
+
+Die Guards laufen in dieser Reihenfolge: `YsocialInboxDemoGuard` (ohne Demo-Liste 404), dann `YsocialMetaWebhookGuard` statt `YsocialTokenGuard`. Das ist eine Ausnahme von der Fork-Regel, weil Meta den Service-Token nicht schicken kann. `ysocial.token.guard.spec.ts` lässt sie nur für genau diesen Controller zu und verlangt dort genau zwei Handler (`GET` und `POST` auf dem Pfad selbst). Andere Methoden als `GET`, `HEAD` und `POST` weist der Guard ab.
+
+| Anfrage | Prüfung | Antwort |
+|---|---|---|
+| `GET ?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…` (Prüfung beim Speichern im App-Dashboard) | `hub.verify_token` gleich `YSOCIAL_META_WEBHOOK_VERIFY_TOKEN`, Vergleich in konstanter Zeit. `hub.challenge` nur Ziffern (laut Referenz „an int“) | 200 mit `hub.challenge` als Text. Token fehlt in der Umgebung: 503. Falsch, fehlt oder anderer `hub.mode`: 403 |
+| `POST` mit JSON (Ereignis) | `X-Hub-Signature-256: sha256=<hex>` gleich HMAC-SHA256 des Rohkörpers mit `FACEBOOK_APP_SECRET`, Vergleich in konstanter Zeit. Den Rohkörper liefert Nest, weil Postiz in `apps/backend/src/main.ts` `rawBody: true` setzt (so auch Stripe) | 200 `{"received":<n>}`, auch wenn nichts gespeichert werden konnte, denn Meta würde nur dasselbe noch einmal schicken. Secret fehlt: 503. Kopf fehlt oder Signatur falsch: 401 |
+
+Quelle: Meta, „Get started with webhooks“ (Verification Requests, Validating Payloads, Antwort 200, Wiederholung bis 36 Stunden, Ereignisse können doppelt kommen), gelesen am 17.11.2026. Links im Kopf von `libraries/ysocial/src/webhooks/webhook.rules.ts`.
+
+**Protokoll:** Je Änderung (`entry[].changes[]`) ein Eintrag in Redis unter `ysocial:demo:meta-webhook-events`. Die Liste hält die letzten 50 Einträge und verfällt 24 Stunden nach dem letzten. Es gibt keine Tabelle.
+
+    {"receivedAt":"…","object":"page","entryId":"<Seite>","sentAt":"…","field":"feed","item":"comment","verb":"add","postId":"<Seite>_<Post>","commentId":"<Post>_<Kommentar>","parentId":"<Seite>_<Post>","mediaId":null,"createdAt":"…"}
+
+- `object` ist `page` oder `instagram`, `entryId` die Seiten-ID oder die ID des Instagram-Kontos. Benachrichtigungen anderer Objekte der App (etwa `user` oder `permissions`, dort wäre `entry.id` die ID einer Person) speichert der Empfänger nicht, er antwortet 200 und loggt `ignored`.
+- `item` und `verb` gibt es nur beim Seiten-Feld `feed`, etwa `comment`/`add`, `comment`/`hide` oder `reaction`/`add`.
+- Bei Instagram `comments` stehen `commentId` (`comment_id`, sonst `id`), `parentId` und `mediaId`.
+- Zeiten von Meta (Unix-Sekunden) stehen als ISO-Datum darin. Felder mit unerwartetem Wert stehen auf `null`.
+- Nie gespeichert und nie im Log: `message`, `text`, `from` (Name, Nutzername, ID der Person) und alle übrigen Felder von `value`.
+- Log: `meta webhook object=<page|instagram|-> events=<n> fields=<…> result=<recorded|ignored|store_failed error=…>`. Abgewiesene Anfragen: `meta webhook <verify|receive> result=rejected code=<not_configured|verify_invalid|signature_missing|signature_invalid>`. Weder Token noch Signatur stehen darin.
+
+**Grenzen und Ungeprüftes**
+- Webhooks einer App kommen an genau einen Endpunkt (`meta.md` 2.6). Gilt für die App von Staging.
+- Feed-Ereignisse von Personen ohne Rolle in der App kommen vor Advanced Access vermutlich nicht an (`meta.md` §1, Punkt 4). Instagram-Kommentare gibt es nur mit Advanced Access und Live-App. **Ungeprüft**.
+- Ob die Testnachricht des App-Dashboards (Knopf „Test“) signiert ist wie ein echtes Ereignis, ist **ungeprüft**. Ihre IDs sind Beispielwerte.
+- Express liest JSON bis 100 KB (Vorgabe von Nest). Meta bündelt bis zu 1000 Änderungen in einer Anfrage. Ein größerer Body endet mit 413 vor der Signaturprüfung, Meta wiederholt dann. Für die Demo reicht das.
+- Je Ereignis ein `RPUSH`, dann `LTRIM` und `EXPIRE`, nicht in einer Transaktion. Bricht Redis dazwischen ab, bleibt die Liste bis zum nächsten Ereignis ohne Ablaufzeit. Lokal ohne `REDIS_URL` nutzt Postiz einen Ersatz ohne `LTRIM`, dort loggt jeder Empfang `store_failed`.
+- Ein Ereignis, das Meta doppelt schickt, steht doppelt im Protokoll.
 
 ## Ping von Hand (PR 16, QA 4)
 

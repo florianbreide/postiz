@@ -26,6 +26,7 @@ import { YsocialModule } from './ysocial.module';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 const TOKEN_ENV = 'YSOCIAL_SERVICE_TOKEN';
@@ -1159,6 +1160,512 @@ describe('/ysocial/inbox', () => {
       const res = await reply();
       expect(res.status).toBe(201);
       expect(res.json().replyId).toBeNull();
+    });
+  });
+
+  describe('webhooks of the Page', () => {
+    const APP_ID_ENV = 'FACEBOOK_APP_ID';
+    const APP_ID = '900000000000001';
+    const FOREIGN_APP_ID = '900000000000002';
+    const FOREIGN_APP_NAME = 'Erfundene Fremde App';
+    const OWN_APP_NAME = 'Erfundene Eigene App';
+    const NODE = 'me';
+    const EDGE = `${NODE}/subscribed_apps`;
+    const savedAppId = process.env[APP_ID_ENV];
+    const path = (call: GraphCall) =>
+      call.url.pathname.replace(`/${META_GRAPH_API_VERSION}`, '');
+
+    const getWebhooks = (id = CHANNEL) =>
+      request('GET', `/integrations/${id}/webhooks`);
+    const subscribe = (
+      id = CHANNEL,
+      opts: Parameters<typeof request>[2] = {}
+    ) => request('POST', `/integrations/${id}/webhooks`, opts);
+    const edgeCalls = () =>
+      graphCalls.filter((call) => path(call) === `/${EDGE}`);
+
+    const platform = (data: unknown[]) => {
+      graphHandler = (call) =>
+        call.method === 'GET' && path(call) === `/${EDGE}`
+          ? json({ data })
+          : defaultGraph(call);
+    };
+    const ownApp = (fields: unknown[] = ['feed']) => ({
+      id: APP_ID,
+      name: OWN_APP_NAME,
+      link: 'https://www.facebook.com/games/?app_id=900000000000001',
+      subscribed_fields: fields,
+    });
+    const foreignApp = {
+      id: FOREIGN_APP_ID,
+      name: FOREIGN_APP_NAME,
+      subscribed_fields: ['feed', 'messages'],
+    };
+
+    beforeEach(() => {
+      process.env[APP_ID_ENV] = APP_ID;
+      // Meta accepts the subscription unless a test says otherwise.
+      graphHandler = (call) =>
+        call.method === 'POST' && path(call) === `/${EDGE}`
+          ? json({ success: true })
+          : defaultGraph(call);
+    });
+
+    afterEach(() => {
+      if (savedAppId === undefined) {
+        delete process.env[APP_ID_ENV];
+      } else {
+        process.env[APP_ID_ENV] = savedAppId;
+      }
+      // The answers of both routes carry no id and no name of another app.
+      for (const text of responses) {
+        expect(text).not.toContain(FOREIGN_APP_ID);
+        expect(text).not.toContain(FOREIGN_APP_NAME);
+        expect(text).not.toContain(OWN_APP_NAME);
+      }
+    });
+
+    describe('GET /integrations/:id/webhooks', () => {
+      it('is subscribed when our app is on the Page, with the filtered fields', async () => {
+        platform([
+          foreignApp,
+          ownApp(['feed', 'Bad Field', 'mention', 7, null, 'x'.repeat(41)]),
+        ]);
+        const res = await getWebhooks();
+        expect(res.status).toBe(200);
+        expect(res.json()).toEqual({
+          integrationId: CHANNEL,
+          provider: 'instagram',
+          subscribed: true,
+          fields: ['feed', 'mention'],
+        });
+        expect(graphCalls).toHaveLength(1);
+        expect(graphCalls[0].method).toBe('GET');
+        expect(path(graphCalls[0])).toBe(`/${EDGE}`);
+        expect(graphCalls[0].url.searchParams.get('access_token')).toBe(
+          pageToken
+        );
+        expect(logLines).toEqual([
+          `inbox webhooks channel=${CHANNEL} result=ok subscribed=true fields=feed,mention`,
+        ]);
+      });
+
+      it('is subscribed with no fields when our app has none', async () => {
+        platform([{ id: APP_ID }, { ...ownApp(), id: FOREIGN_APP_ID }]);
+        const res = await getWebhooks();
+        expect(res.json()).toMatchObject({ subscribed: true, fields: [] });
+        expect(logLines).toEqual([
+          `inbox webhooks channel=${CHANNEL} result=ok subscribed=true fields=-`,
+        ]);
+      });
+
+      it('is not subscribed when only foreign apps are on the Page', async () => {
+        platform([foreignApp]);
+        const res = await getWebhooks();
+        expect(res.status).toBe(200);
+        expect(res.json()).toEqual({
+          integrationId: CHANNEL,
+          provider: 'instagram',
+          subscribed: false,
+          fields: [],
+        });
+      });
+
+      it('is not subscribed when no app is on the Page or Meta sends no data', async () => {
+        for (const data of [[], undefined] as (unknown[] | undefined)[]) {
+          graphHandler = (call) =>
+            call.method === 'GET' && path(call) === `/${EDGE}`
+              ? json(data === undefined ? {} : { data })
+              : defaultGraph(call);
+          const res = await getWebhooks();
+          expect(res.status).toBe(200);
+          expect(res.json()).toMatchObject({ subscribed: false, fields: [] });
+        }
+      });
+
+      it('is not subscribed without FACEBOOK_APP_ID, even with an app on the Page', async () => {
+        platform([ownApp(), foreignApp]);
+        for (const value of [undefined, '']) {
+          if (value === undefined) {
+            delete process.env[APP_ID_ENV];
+          } else {
+            process.env[APP_ID_ENV] = value;
+          }
+          const res = await getWebhooks();
+          expect(res.status).toBe(200);
+          expect(res.json()).toMatchObject({ subscribed: false, fields: [] });
+        }
+      });
+
+      it('compares the id of the app exactly, also when Meta sends a number', async () => {
+        platform([{ ...ownApp(), id: Number(APP_ID) }]);
+        expect((await getWebhooks()).json().subscribed).toBe(true);
+        platform([{ ...ownApp(), id: `${APP_ID}0` }]);
+        expect((await getWebhooks()).json().subscribed).toBe(false);
+      });
+
+      it('writes nothing', async () => {
+        platform([ownApp()]);
+        await getWebhooks();
+        expect(writes()).toEqual([]);
+      });
+
+      it('answers 401 without a token and 404 without the demo list', async () => {
+        const noAuth = await request(
+          'GET',
+          `/integrations/${CHANNEL}/webhooks`,
+          {
+            auth: '',
+          }
+        );
+        expect(noAuth.status).toBe(401);
+        delete process.env[LIST_ENV];
+        expect((await getWebhooks()).status).toBe(404);
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('answers 403 for a channel that is not listed, without a call', async () => {
+        const res = await getWebhooks(OTHER_CHANNEL);
+        expect(res.status).toBe(403);
+        expect(res.json()).toMatchObject({ code: 'not_demo_integration' });
+        expect(graphCalls).toEqual([]);
+        expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+      });
+
+      it('answers 409 channel_inactive for a disabled channel, without a call', async () => {
+        repository.getChannelForInbox.mockResolvedValue(
+          row({ disabled: true })
+        );
+        const res = await getWebhooks();
+        expect(res.status).toBe(409);
+        expect(res.json()).toMatchObject({ code: 'channel_inactive' });
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('answers 502 for a refusal of Meta and 503 for a network error', async () => {
+        graphHandler = () =>
+          json({ error: { message: META_MESSAGE, code: 190 } }, 401);
+        const refused = await getWebhooks();
+        expect(refused.status).toBe(502);
+        expect(refused.json()).toMatchObject({
+          code: 'platform_error',
+          platformCode: 190,
+        });
+        graphHandler = () => {
+          throw new Error(`fetch failed access_token=${pageToken}`);
+        };
+        const down = await getWebhooks();
+        expect(down.status).toBe(503);
+        expect(down.json()).toMatchObject({ code: 'platform_unavailable' });
+        expect(logLines).toEqual([
+          `inbox webhooks channel=${CHANNEL} result=rejected code=platform_error status=401 platform=190/-`,
+          `inbox webhooks channel=${CHANNEL} result=rejected code=platform_unavailable`,
+        ]);
+      });
+    });
+
+    describe('POST /integrations/:id/webhooks', () => {
+      it('subscribes the app with one POST, the fields and the token in the body', async () => {
+        const res = await subscribe();
+        expect(res.status).toBe(200);
+        expect(res.json()).toEqual({
+          integrationId: CHANNEL,
+          provider: 'instagram',
+          subscribed: true,
+          fields: ['feed'],
+        });
+        expect(graphCalls).toHaveLength(1);
+        const [call] = graphCalls;
+        expect(call.method).toBe('POST');
+        expect(call.url.host).toBe('graph.facebook.com');
+        expect(path(call)).toBe(`/${EDGE}`);
+        expect(call.body?.get('subscribed_fields')).toBe('feed');
+        expect(call.body?.get('access_token')).toBe(pageToken);
+        // Not in the URL, where a proxy log would keep it.
+        expect(call.url.search).toBe('');
+        expect(String(call.url)).not.toContain(pageToken);
+        expect(logLines).toEqual([
+          `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=done`,
+        ]);
+        expect(logLines[0]).not.toContain('comment=');
+      });
+
+      it('sends only the Page token to Meta, never the user token', async () => {
+        await subscribe();
+        await getWebhooks();
+        expect(graphCalls).toHaveLength(2);
+        for (const call of graphCalls) {
+          const sent =
+            call.body?.get('access_token') ??
+            call.url.searchParams.get('access_token');
+          expect(sent).toBe(pageToken);
+          expect(`${call.url}${call.body ?? ''}`).not.toContain(userToken);
+        }
+      });
+
+      it('subscribes through "me" and does not use the Instagram account id', async () => {
+        await subscribe();
+        expect(path(graphCalls[0])).toBe('/me/subscribed_apps');
+        expect(String(graphCalls[0].url)).not.toContain(IG);
+      });
+
+      it('answers 400 actor_missing without a call to the database or Meta', async () => {
+        for (const actor of [null, '', '   ']) {
+          const res = await subscribe(CHANNEL, { actor });
+          expect(res.status).toBe(400);
+          expect(res.json()).toMatchObject({ code: 'actor_missing' });
+        }
+        expect(graphCalls).toEqual([]);
+        expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+      });
+
+      it('answers 401 without a token and 404 without the demo list', async () => {
+        expect((await subscribe(CHANNEL, { auth: '' })).status).toBe(401);
+        expect(
+          (await subscribe(CHANNEL, { auth: 'Bearer wrong' })).status
+        ).toBe(401);
+        delete process.env[LIST_ENV];
+        expect((await subscribe()).status).toBe(404);
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('answers 403 not_demo_integration for a channel that is not listed', async () => {
+        const res = await subscribe(OTHER_CHANNEL);
+        expect(res.status).toBe(403);
+        expect(res.json()).toMatchObject({ code: 'not_demo_integration' });
+        expect(graphCalls).toEqual([]);
+        expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+        expect(logLines).toEqual([
+          `inbox subscribe channel=- actor=${ACTOR} result=rejected code=not_demo_integration`,
+        ]);
+      });
+
+      it('answers 404 not_found for a listed channel that does not exist', async () => {
+        repository.getChannelForInbox.mockResolvedValue(null);
+        const res = await subscribe();
+        expect(res.status).toBe(404);
+        expect(res.json()).toMatchObject({ code: 'not_found' });
+        expect(graphCalls).toEqual([]);
+      });
+
+      it.each([
+        ['disabled', { disabled: true }],
+        ['refreshNeeded', { refreshNeeded: true }],
+        ['inBetweenSteps', { inBetweenSteps: true }],
+        ['deleted', { deletedAt: new Date('2026-11-01T00:00:00Z') }],
+      ])(
+        'answers 409 channel_inactive for a channel that is %s, without a call',
+        async (_name, patch) => {
+          repository.getChannelForInbox.mockResolvedValue(row(patch));
+          const res = await subscribe();
+          expect(res.status).toBe(409);
+          expect(res.json()).toMatchObject({ code: 'channel_inactive' });
+          expect(graphCalls).toEqual([]);
+          expect(logLines).toEqual([
+            `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=channel_inactive`,
+          ]);
+        }
+      );
+
+      it('answers 409 provider_not_supported for a provider without an inbox', async () => {
+        repository.getChannelForInbox.mockResolvedValue(
+          row({ providerIdentifier: 'linkedin' })
+        );
+        const res = await subscribe();
+        expect(res.status).toBe(409);
+        expect(res.json()).toMatchObject({ code: 'provider_not_supported' });
+        expect(graphCalls).toEqual([]);
+      });
+
+      it.each([
+        ['success false', { success: false }],
+        ['no success field', {}],
+        ['success as text', { success: 'true' }],
+      ])(
+        'answers 502 platform_error when Meta answers 200 with %s',
+        async (_name, answer) => {
+          graphHandler = (call) =>
+            call.method === 'POST' ? json(answer) : defaultGraph(call);
+          const res = await subscribe();
+          expect(res.status).toBe(502);
+          expect(res.json()).toMatchObject({
+            code: 'platform_error',
+            platformStatus: 200,
+          });
+          expect(res.json()).not.toHaveProperty('subscribed');
+          expect(graphCalls).toHaveLength(1);
+          expect(logLines).toEqual([
+            `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=platform_error status=200 platform=-/-`,
+          ]);
+        }
+      );
+
+      it('answers 502 for a refusal of Meta (4xx) with the codes, one attempt', async () => {
+        graphHandler = () =>
+          json(
+            { error: { message: META_MESSAGE, code: 200, error_subcode: 1 } },
+            403
+          );
+        const res = await subscribe();
+        expect(res.status).toBe(502);
+        expect(res.json()).toMatchObject({
+          code: 'platform_error',
+          platformStatus: 403,
+          platformCode: 200,
+          platformSubcode: 1,
+        });
+        expect(graphCalls).toHaveLength(1);
+        expect(logLines).toEqual([
+          `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=platform_error status=403 platform=200/1`,
+        ]);
+      });
+
+      it.each([500, 502, 503, 599])(
+        'answers 503 outcome_unknown for HTTP %s, with exactly one attempt',
+        async (status) => {
+          graphHandler = () =>
+            json({ error: { message: META_MESSAGE, code: 2 } }, status);
+          const res = await subscribe();
+          expect(res.status).toBe(503);
+          expect(res.json()).toEqual({
+            statusCode: 503,
+            code: 'outcome_unknown',
+          });
+          expect(graphCalls).toHaveLength(1);
+          expect(logLines).toEqual([
+            `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=outcome_unknown status=${status} platform=2/-`,
+          ]);
+        }
+      );
+
+      it('answers 503 outcome_unknown for a network error, with exactly one attempt', async () => {
+        graphHandler = () => {
+          throw new Error(`fetch failed access_token=${pageToken}`);
+        };
+        const res = await subscribe();
+        expect(res.status).toBe(503);
+        expect(res.json()).toEqual({
+          statusCode: 503,
+          code: 'outcome_unknown',
+        });
+        expect(graphCalls).toHaveLength(1);
+        expect(logLines).toEqual([
+          `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=outcome_unknown`,
+        ]);
+      });
+
+      it('answers 500 internal_error for an unexpected error, with the class name only', async () => {
+        repository.getChannelForInbox.mockRejectedValue(
+          new TypeError(`broken ${pageToken}`)
+        );
+        const res = await subscribe();
+        expect(res.status).toBe(500);
+        expect(res.json()).toMatchObject({ code: 'internal_error' });
+        expect(logLines).toEqual([
+          `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=internal_error error=TypeError`,
+        ]);
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('needs no body and writes once', async () => {
+        const res = await subscribe(CHANNEL, { body: undefined });
+        expect(res.status).toBe(200);
+        expect(writes()).toHaveLength(1);
+        expect(edgeCalls()).toHaveLength(1);
+      });
+    });
+  });
+
+  describe('GET /webhooks/events', () => {
+    const service = () => app.get(YsocialMetaWebhookService);
+    const original = () => service()['store'];
+    let savedStore: ReturnType<typeof original>;
+    let stored: string[];
+    const lrange = jest.fn();
+    const event = (commentId: string) =>
+      JSON.stringify({
+        receivedAt: '2026-11-17T12:00:00.000Z',
+        object: 'page',
+        entryId: '100000000000001',
+        sentAt: null,
+        field: 'feed',
+        item: 'comment',
+        verb: 'add',
+        postId: null,
+        commentId,
+        parentId: null,
+        mediaId: null,
+        createdAt: null,
+      });
+
+    beforeEach(() => {
+      savedStore = original();
+      stored = [];
+      lrange.mockReset();
+      lrange.mockImplementation(async () => [...stored]);
+      // Without REDIS_URL the Redis mock of Postiz has no lrange.
+      service()['store'] = { lrange } as unknown as typeof savedStore;
+    });
+
+    afterEach(() => {
+      service()['store'] = savedStore;
+    });
+
+    it('answers 200 with the events newest first and the limits', async () => {
+      stored = [event('11'), event('12'), '{not json', event('13')];
+      const res = await request('GET', '/webhooks/events');
+      expect(res.status).toBe(200);
+      const body = res.json();
+      expect(body.events.map((e: any) => e.commentId)).toEqual([
+        '13',
+        '12',
+        '11',
+      ]);
+      expect(body).toMatchObject({ limit: 50, ttlSeconds: 86400 });
+      expect(lrange).toHaveBeenCalledWith(
+        'ysocial:demo:meta-webhook-events',
+        -50,
+        -1
+      );
+    });
+
+    it('answers 200 with an empty list when nothing was received', async () => {
+      const res = await request('GET', '/webhooks/events');
+      expect(res.status).toBe(200);
+      expect(res.json().events).toEqual([]);
+    });
+
+    it('needs no actor and does not call Meta or the database', async () => {
+      const res = await request('GET', '/webhooks/events', { actor: null });
+      expect(res.status).toBe(200);
+      expect(graphCalls).toEqual([]);
+      expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+    });
+
+    it('answers 401 without a token or with a wrong one, and reads nothing', async () => {
+      stored = [event('11')];
+      for (const auth of ['', 'Bearer wrong', `Basic ${serviceToken}`]) {
+        const res = await request('GET', '/webhooks/events', { auth });
+        expect(res.status).toBe(401);
+        expect(res.text).not.toContain('commentId');
+      }
+      expect(lrange).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 without the demo list, before the token check, and reads nothing', async () => {
+      stored = [event('11')];
+      delete process.env[LIST_ENV];
+      for (const auth of [`Bearer ${serviceToken}`, '']) {
+        const res = await request('GET', '/webhooks/events', { auth });
+        expect(res.status).toBe(404);
+      }
+      expect(lrange).not.toHaveBeenCalled();
+    });
+
+    it('is not taken by the :id routes', async () => {
+      // "/webhooks/events" is its own route, not a channel named "webhooks".
+      const res = await request('GET', '/webhooks/events');
+      expect(res.json()).toHaveProperty('events');
     });
   });
 });
