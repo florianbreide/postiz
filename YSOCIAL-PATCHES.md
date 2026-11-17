@@ -9,14 +9,14 @@ Diese Datei listet jede Abweichung unseres Forks von Postiz. Sie ist die Grundla
 ## Regeln
 
 1. Eigener Code liegt nur in `apps/backend/src/ysocial/`, `apps/orchestrator/src/ysocial/` und `libraries/ysocial/`.
-2. Jede Änderung an einer Postiz-Datei ist ein Patch und steht in Tabelle 1. Höchstens 5 Patches.
+2. Jede Änderung an einer Postiz-Datei ist ein Patch und steht in Tabelle 1. Höchstens 8 Patches. Die Übergabe nennt 5 (§6), Florian hat am 17.11.2026 die Ausnahme E58 aus dem Plan für Phase 2 freigegeben: 2 für die Meta-Scopes, 1 für LinkedIn Weg A, 1–2 für den Payload-Codec. TikTok bleibt ohne Patch.
 3. Neue Dateien außerhalb der ysocial-Ordner zählen nicht als Patch (E6). Sie stehen in Tabelle 2.
 4. Keine neuen Tabellen im Postiz-Schema. Jeder Start führt `prisma db push` aus.
 5. `libraries/ysocial/` wird mit relativen Pfaden importiert. Ein neuer Alias in `tsconfig.base.json` wäre ein weiterer Patch.
 
 ## Stand
 
-**Patches: 3 von höchstens 5**
+**Patches: 3 von höchstens 8** (E58)
 
 Letzter Sync: Sicherheits-Sync von v2.25.1 auf v2.25.3 am 11.11.2026 (Branch `upstream-sync/2026-11-security`). Beide Patches stehen unverändert an ihrer Stelle, der Merge lief ohne Konflikt.
 
