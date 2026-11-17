@@ -13,6 +13,8 @@ import {
   expectSuccess,
   GraphObject,
   metaGraph,
+  pageWebhookSubscription,
+  subscribePageWebhooks,
   text,
 } from './meta.graph';
 
@@ -188,6 +190,19 @@ export class InstagramInbox implements YsocialInboxProvider {
     expectSuccess(
       await this.graph('DELETE', channel, commentId, undefined, {})
     );
+  }
+
+  // Comment webhooks of Instagram come through the linked Page: our app has
+  // to be on it (meta.graph.ts). The Page token stands for that Page, so
+  // "me" is the Page. The field comments itself is set in the App Dashboard.
+  async webhookSubscription(channel: InboxChannel) {
+    const [accessToken] = channel.token.split('___');
+    return pageWebhookSubscription(accessToken, 'me');
+  }
+
+  async subscribeWebhooks(channel: InboxChannel) {
+    const [accessToken] = channel.token.split('___');
+    return subscribePageWebhooks(accessToken, 'me');
   }
 
   private async graph(

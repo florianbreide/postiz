@@ -47,6 +47,8 @@ const countComments = (posts: InboxPost[]) =>
 /**
  * Inbox demo for the Meta screencasts (PLAN 3.3 PR 26, E25). Reads the
  * comments of the latest posts, replies as the account, hides and deletes.
+ * Puts our app on the Page of the channel for webhooks (PR B), the receiver
+ * is YsocialMetaWebhookService.
  *
  * - Only for channels in YSOCIAL_DEMO_INTEGRATIONS, checked here for every
  *   call, read and write (rule 9). The guard only decides whether the
@@ -160,10 +162,62 @@ export class YsocialInboxService {
     );
   }
 
+  // Whether our app is on the Page of the channel, with which Page fields
+  // (PR B). Read only.
+  async getWebhooks(integrationId: string) {
+    const listed = isDemoIntegration(process.env, integrationId);
+    const log: Log = (result) =>
+      this._logger.log(
+        `inbox webhooks channel=${
+          listed ? integrationId : '-'
+        } result=${result}`
+      );
+
+    return this.guarded(log, async () => {
+      const { provider, channel } = await this.channelFor(
+        integrationId,
+        listed,
+        log
+      );
+      const { subscribed, fields } = await this.platform(log, () =>
+        provider.webhookSubscription(channel)
+      );
+      log(`ok subscribed=${subscribed} fields=${fields.join(',') || '-'}`);
+      return {
+        integrationId,
+        provider: provider.identifier,
+        subscribed,
+        fields,
+      };
+    });
+  }
+
+  // Puts our app on the Page of the channel with the field feed (PR B). A
+  // write at Meta like a reply: only on a call of a person, with the actor.
+  subscribeWebhooks(integrationId: string, actorHeader: string | undefined) {
+    return this.write(
+      'subscribe',
+      integrationId,
+      null,
+      actorHeader,
+      async (provider, channel) => {
+        const { fields } = await provider.subscribeWebhooks(channel);
+        return {
+          integrationId,
+          provider: provider.identifier,
+          subscribed: true,
+          fields,
+        };
+      }
+    );
+  }
+
+  // commentId null: a write on the channel itself, without a comment and
+  // without the ownership check of a comment.
   private async write<T>(
     action: string,
     integrationId: string,
-    commentId: string,
+    commentId: string | null,
     actorHeader: string | undefined,
     run: (provider: YsocialInboxProvider, channel: InboxChannel) => Promise<T>,
     confirmed = true
@@ -179,12 +233,14 @@ export class YsocialInboxService {
 
     // Only ids that passed a check go into the log, never a raw path.
     const listed = isDemoIntegration(process.env, integrationId);
-    const validComment = isPlatformId(commentId);
+    const validComment = commentId === null || isPlatformId(commentId);
+    const comment =
+      commentId === null ? '' : ` comment=${validComment ? commentId : '-'}`;
     const log: Log = (result) =>
       this._logger.log(
-        `inbox ${action} channel=${listed ? integrationId : '-'} comment=${
-          validComment ? commentId : '-'
-        } actor=${actor} result=${result}`
+        `inbox ${action} channel=${
+          listed ? integrationId : '-'
+        }${comment} actor=${actor} result=${result}`
       );
 
     return this.guarded(log, async () => {
@@ -203,12 +259,14 @@ export class YsocialInboxService {
         }
       );
 
-      const owned = await this.platform(log, () =>
-        provider.ownsComment(channel, commentId)
-      );
-      if (!owned) {
-        log('rejected code=comment_not_found');
-        throw rejection({ status: 404, code: 'comment_not_found' });
+      if (commentId !== null) {
+        const owned = await this.platform(log, () =>
+          provider.ownsComment(channel, commentId)
+        );
+        if (!owned) {
+          log('rejected code=comment_not_found');
+          throw rejection({ status: 404, code: 'comment_not_found' });
+        }
       }
 
       const result = await this.platform(

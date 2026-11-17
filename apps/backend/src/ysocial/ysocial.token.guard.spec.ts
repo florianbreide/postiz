@@ -27,6 +27,8 @@ import { YsocialReadController } from './ysocial.read.controller';
 import { YsocialRetryController } from './ysocial.retry.controller';
 import { YsocialTestController } from './ysocial.test.controller';
 import { YsocialInboxController } from './ysocial.inbox.controller';
+import { YsocialMetaWebhookController } from './ysocial.meta.webhook.controller';
+import { YsocialMetaWebhookGuard } from './ysocial.meta.webhook.guard';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
@@ -109,9 +111,15 @@ describe('YsocialTokenGuard', () => {
 // every controller class in apps/backend/src/ysocial (any file, any module)
 // and fails if one is not protected at class level. A stricter guard is
 // allowed: add it to ACCEPTED_GUARDS.
+// YsocialMetaWebhookGuard: the receiver of the Meta webhooks (PR B) cannot
+// get the service token from Meta. It checks the verify token (GET) or the
+// signature with the App Secret (POST) instead, fail-closed.
 describe('every ysocial controller', () => {
   type Constructor = new (...args: any[]) => unknown;
-  const ACCEPTED_GUARDS: Constructor[] = [YsocialTokenGuard];
+  const ACCEPTED_GUARDS: Constructor[] = [
+    YsocialTokenGuard,
+    YsocialMetaWebhookGuard,
+  ];
 
   const sourceFiles = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -143,6 +151,7 @@ describe('every ysocial controller', () => {
     expect(controllers).toContain(YsocialRetryController);
     expect(controllers).toContain(YsocialTestController);
     expect(controllers).toContain(YsocialInboxController);
+    expect(controllers).toContain(YsocialMetaWebhookController);
   });
 
   // The PoliciesGuard of Postiz skips paths with /auth, so such a path would
@@ -164,11 +173,14 @@ describe('every ysocial controller', () => {
 
   it.each(
     controllers.map((controller) => ({ name: controller.name, controller }))
-  )('$name is protected by YsocialTokenGuard', ({ controller }) => {
-    const guards: unknown[] =
-      Reflect.getMetadata(GUARDS_METADATA, controller) ?? [];
-    expect(guards.some(isAcceptedGuard)).toBe(true);
-  });
+  )(
+    '$name is protected by YsocialTokenGuard or a stricter guard',
+    ({ controller }) => {
+      const guards: unknown[] =
+        Reflect.getMetadata(GUARDS_METADATA, controller) ?? [];
+      expect(guards.some(isAcceptedGuard)).toBe(true);
+    }
+  );
 });
 
 describe('GET /ysocial/status', () => {

@@ -96,6 +96,12 @@ export interface YsocialInboxProvider {
   ): Promise<{ id: string | null }>;
   hide(channel: InboxChannel, commentId: string, hide: boolean): Promise<void>;
   remove(channel: InboxChannel, commentId: string): Promise<void>;
+  // Webhooks of the demo (PR B): our app on the Page of the channel and
+  // the Page fields it receives.
+  webhookSubscription(
+    channel: InboxChannel
+  ): Promise<{ subscribed: boolean; fields: string[] }>;
+  subscribeWebhooks(channel: InboxChannel): Promise<{ fields: string[] }>;
 }
 
 /**

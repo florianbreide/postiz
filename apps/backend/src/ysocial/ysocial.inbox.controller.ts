@@ -19,6 +19,7 @@ import {
   YsocialInboxReplyDto,
 } from '../../../../libraries/ysocial/src/dtos/ysocial.inbox.dto';
 import { YSOCIAL_ACTOR_HEADER } from '../../../../libraries/ysocial/src/retry/retry.rules';
+import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
 
 // Inbox demo for the Meta screencasts (PLAN 3.3 PR 26, E25), only on
 // staging. Internal like /ysocial/status: the reverse proxy blocks
@@ -29,7 +30,10 @@ import { YSOCIAL_ACTOR_HEADER } from '../../../../libraries/ysocial/src/retry/re
 @UseGuards(YsocialInboxDemoGuard, YsocialTokenGuard)
 @Controller('/ysocial/inbox')
 export class YsocialInboxController {
-  constructor(private _inboxService: YsocialInboxService) {}
+  constructor(
+    private _inboxService: YsocialInboxService,
+    private _webhookService: YsocialMetaWebhookService
+  ) {}
 
   @Get('/integrations/:id/comments')
   getComments(@Param('id') id: string) {
@@ -71,5 +75,29 @@ export class YsocialInboxController {
       actor,
       body?.confirmDelete === true
     );
+  }
+
+  // Webhooks for the demo (PR B): is our app on the Page of the channel?
+  @Get('/integrations/:id/webhooks')
+  getWebhooks(@Param('id') id: string) {
+    return this._inboxService.getWebhooks(id);
+  }
+
+  // Puts our app on the Page with the field feed. A write at Meta, so
+  // X-Ysocial-Actor like the other writes.
+  @Post('/integrations/:id/webhooks')
+  @HttpCode(200)
+  subscribeWebhooks(
+    @Param('id') id: string,
+    @Headers(YSOCIAL_ACTOR_HEADER) actor: string | undefined
+  ) {
+    return this._inboxService.subscribeWebhooks(id, actor);
+  }
+
+  // The latest events the receiver logged, newest first. Ids, field, kind
+  // and time, no text and no names.
+  @Get('/webhooks/events')
+  getWebhookEvents() {
+    return this._webhookService.events();
   }
 }

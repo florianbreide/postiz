@@ -4,9 +4,11 @@ import { YsocialReadController } from './ysocial.read.controller';
 import { YsocialRetryController } from './ysocial.retry.controller';
 import { YsocialTestController } from './ysocial.test.controller';
 import { YsocialInboxController } from './ysocial.inbox.controller';
+import { YsocialMetaWebhookController } from './ysocial.meta.webhook.controller';
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialTestRoutesGuard } from './ysocial.test.routes.guard';
 import { YsocialInboxDemoGuard } from './ysocial.inbox.demo.guard';
+import { YsocialMetaWebhookGuard } from './ysocial.meta.webhook.guard';
 import { YsocialStatusService } from './ysocial.status.service';
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
@@ -15,6 +17,7 @@ import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/databa
 import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/health/ysocial.test.switch.service';
 import { YsocialInboxService } from '../../../../libraries/ysocial/src/inbox/ysocial.inbox.service';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
 import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 // Entry point for all ysocial backend code. Imported once in
@@ -29,12 +32,14 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialRetryController,
     YsocialTestController,
     YsocialInboxController,
+    YsocialMetaWebhookController,
   ],
   providers: [
     ysocialTokenKeyCheckProvider,
     YsocialTokenGuard,
     YsocialTestRoutesGuard,
     YsocialInboxDemoGuard,
+    YsocialMetaWebhookGuard,
     YsocialStatusService,
     YsocialReadService,
     YsocialReadRepository,
@@ -43,6 +48,7 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialTestSwitchService,
     YsocialInboxService,
     YsocialInboxRepository,
+    YsocialMetaWebhookService,
   ],
 })
 export class YsocialModule {}
