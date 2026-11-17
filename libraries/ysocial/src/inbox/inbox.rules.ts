@@ -80,7 +80,33 @@ export interface InboxReply {
   // Business Suite or another tool. Only this flag leaves the fork, never
   // the id of the author.
   fromOwner: boolean;
+  // Names the platform tagged in the text, never their ids (W76).
+  mentions: string[];
 }
+
+// The hub redacts tagged names like the author before a text goes to the AI
+// (W76): the name of a tag and the part of the text it covers. At most this
+// many per entry, each cut to this length.
+export const INBOX_MENTIONS_LIMIT = 50;
+export const INBOX_MENTION_MAX_LENGTH = 300;
+
+// The entries of mentions: strings only, trimmed and cut, without empty
+// ones and doubles, in order.
+// A cut never leaves half of a surrogate pair at the end.
+export const mentionNames = (names: unknown[]): string[] =>
+  [
+    ...new Set(
+      names
+        .filter((name): name is string => typeof name === 'string')
+        .map((name) =>
+          name
+            .trim()
+            .slice(0, INBOX_MENTION_MAX_LENGTH)
+            .replace(/[\uD800-\uDBFF]$/, '')
+        )
+        .filter(Boolean)
+    ),
+  ].slice(0, INBOX_MENTIONS_LIMIT);
 
 export interface InboxComment extends InboxReply {
   replies: InboxReply[];

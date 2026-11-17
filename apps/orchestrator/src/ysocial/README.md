@@ -399,7 +399,7 @@ Antwort der Leseroute:
       "fetchedAt": "2026-11-12T09:00:00.000Z",
       "posts": [{
         "id": "…", "permalink": "https://www.instagram.com/p/…", "timestamp": "…", "mediaType": "IMAGE", "commentsCount": 2,
-        "comments": [{ "id": "…", "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "replies": [] }]
+        "comments": [{ "id": "…", "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "fromOwner": false, "mentions": [], "replies": [] }]
       }]
     }
 
@@ -533,7 +533,7 @@ Antwort:
       "integrationId": "…", "provider": "instagram", "fetchedAt": "…",
       "since": "…", "postsFrom": "…", "postsBefore": null,
       "posts": [{ "id": "…", "permalink": "https://…", "timestamp": "…", "mediaType": "…", "commentsCount": 3, "truncated": false }],
-      "items": [{ "id": "…", "postId": "…", "parentId": null, "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "fromOwner": false }],
+      "items": [{ "id": "…", "postId": "…", "parentId": null, "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "fromOwner": false, "mentions": [] }],
       "nextCursor": null,
       "usage": { "percent": 12, "regainMinutes": 0 }
     }
@@ -541,6 +541,7 @@ Antwort:
 - `items` ist flach. `parentId` ist der Kommentar der obersten Ebene einer Antwort und `null` für einen Kommentar der obersten Ebene, also einem Ticket (E83).
 - `fromOwner: true`: Die Seite oder das Konto des Kanals hat den Eintrag geschrieben, auch aus Business Suite oder einem anderen Werkzeug. Daran erkennt der Hub „außerhalb geantwortet“ (E83) und legt für einen eigenen Kommentar kein Ticket an. Nach außen geht nur dieses Flag, nie die ID der Person. Facebook: `from.id` gleich der Seiten-ID. Instagram: Feld `user` gleich dem Konto des Kanals, laut Referenz „only returned if the app user created the IG Comment“. Beides **ungeprüft**, auf Staging prüfen (QA).
 - `username`: Facebook `from.name` (Anzeigename der Person oder Seite), Instagram `username` (Handle). Kann `null` sein.
+- `mentions` (ab 0.9.9, W76): die Namen, die die Plattform im Text markiert hat, damit der Hub sie vor der KI schwärzt wie den Autor. Facebook: je Eintrag von `message_tags` des Kommentars `name` und der markierte Teil des Textes (`offset`, `length`). Eine auf den Vornamen gekürzte Markierung zeigt im Text nur diesen, `name` bleibt der volle Name, so findet die Schwärzung beides. Angenommen ist, dass Meta `offset` und `length` in UTF-16-Einheiten zählt wie JavaScript (ungeprüft, unten). Ein Teil außerhalb des Textes oder einer, der ein Surrogate-Paar (etwa ein Emoji) teilt, fällt weg. Das Feld steht nicht in der Feldliste der Comment-Referenz (gelesen am 17.11.2026), aber im Comment-Objekt des Business SDK von Meta als `list<EntityAtTextRange>` mit `id`, `name`, `type`, `offset` und `length` (`facebook-python-business-sdk`, `adobjects/comment.py`). Gelesen werden `name`, `offset` und `length`. Nach außen gehen nur `name` und der Ausschnitt, nie `id` oder `type`. **Ungeprüft**, auf Staging prüfen (QA). Ohne IDs, getrimmt, ohne leere Einträge und Doppelte, in der Reihenfolge von Meta, höchstens 50, jeder auf 300 Zeichen gekürzt. Instagram: immer `[]`, die @-Handles stehen im Text, die findet der Hub selbst. Die Namen stehen nie im Log. Dasselbe Feld tragen `comments/:commentId` und die Demo-Route `comments`.
 - `timestamp` ist `null`, wenn Meta keine lesbare Zeit schickt. Laut Referenz kommt die Zeit immer, ein Eintrag ohne sie fällt nie aus `since` und kommt bei jedem Abruf wieder. Der Hub nimmt dann `fetchedAt`.
 - `posts` nennt jeden gelesenen Post des Fensters, auch ohne neue Einträge, für Link und Zuordnung.
 - `commentsCount`: Instagram `comments_count` von Meta, Antworten eingeschlossen. Facebook `null`, ein Seitenpost hat kein solches Feld.
@@ -574,6 +575,7 @@ Abweisungen wie bei der Demo, dazu:
 **Grenzen und Ungeprüftes**
 - **Lesetest B63 offen** (PLAN Phase 3, R61): ob Meta mit Standard Access Kommentare von Personen ohne App-Rolle liefert. Florian bzw. der Koordinator prüft auf Staging mit `curl` im Docker-Netz, je Kommentar nur `hasMessage` und `hasFrom`. Das Ergebnis kommt in den PR und die ROADMAP.
 - `fromOwner` bei Facebook und Instagram **ungeprüft** (oben). Liefert Meta das Feld nicht wie erwartet, steht dort immer `false`. Dann behandelt der Hub eigene Antworten wie fremde, wie vor 0.9.6.
+- `mentions` bei Facebook **ungeprüft** (oben). Kennt die Graph-Version `message_tags` am Kommentar nicht, scheitert jeder Lesezugriff auf Facebook mit 502 `platform_error` und Code 100, denn Meta lehnt unbekannte Felder ab. Ebenso jede schreibende Route ohne `postId`, weil die Prüfung vor dem Schreiben dieselbe Liste liest; mit `postId` sucht sie nur nach IDs. Geschrieben wird dann nichts. Dann zurück auf das Image davor. Liefert Meta das Feld ohne Namen, bleibt `mentions` leer und der Hub schwärzt nur den Autor. Ebenfalls **ungeprüft**: dass Meta bei einer gekürzten Markierung `offset` und `length` des sichtbaren Teils schickt und in UTF-16-Einheiten zählt (Staging, QA). Zählte Meta in Codepunkten, wären die Werte bei einem Emoji davor um eins zu klein: Der Ausschnitt begänne zu früh und schnitte das Ende ab, aus „Max“ würde „Ma“. Der Vorname bliebe dann ganz oder teilweise sichtbar wie ohne den Ausschnitt, und ein kurzer Teil schwärzte ohne Wortgrenzen zu viel. Teilt die Verschiebung ein Emoji, fällt der Ausschnitt weg. `name` ist in jedem Fall dabei. Zeigt QA das auf Staging, kommt der Ausschnitt wieder heraus.
 - `order=reverse_chronological` als Parameter der Kante `comments` beschreibt die Referenz nur unter `summary` (wie bei der Demo). Wirkt es nicht, kommen bei Posts mit mehr als 50 Kommentaren die ältesten 50 und bei Kommentaren mit mehr als 25 Antworten die ältesten 25. Dann steht `truncated: true` dabei, und neue Einträge dort erreichen den Hub nicht. Auf Staging prüfen.
 - Besitz bei Facebook ohne `postId`: Gefunden wird nur, was die Suche in den Posts der letzten 30 Tage und den letzten 10 Posts sieht, also nicht eine Antwort jenseits der neuesten 25 eines Kommentars. Mit `postId` findet sie jeden Kommentar des Posts, solange die 25 s reichen.
 - Laufzeit: Die erste Seite läuft immer. Ein Aufruf an Meta darf 15 s dauern. Bei Facebook folgen auf den Aufruf einer Seite das Nachlesen der Kommentare und das der Antworten, jeweils nebeneinander. Eine einzelne Seite kann also bis etwa 45 s brauchen, in der Regel wenige Sekunden. Die Grenze von 25 s gilt für den Beginn weiterer Seiten.

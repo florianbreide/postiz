@@ -51,6 +51,9 @@ const COMMENTER = 'Erfundene Person';
 const COMMENTER_ID = '500000000000777';
 const REPLY_TEXT = 'Erfundene Antwort des Kontos';
 const META_MESSAGE = 'Erfundene Meldung von Meta, nie im Log';
+// Names tagged in a comment (W76): never in a log line.
+const MENTION_PERSON = 'Erika Beispiel';
+const MENTION_ID = '600000000000001';
 
 const row = (patch: Record<string, unknown> = {}): any => ({
   id: CHANNEL,
@@ -272,6 +275,8 @@ describe('/ysocial/inbox with a Facebook Page', () => {
       COMMENTER_ID,
       REPLY_TEXT,
       META_MESSAGE,
+      MENTION_PERSON,
+      MENTION_ID,
       pageToken,
       serviceToken,
     ];
@@ -366,6 +371,7 @@ describe('/ysocial/inbox with a Facebook Page', () => {
                 likeCount: 2,
                 hidden: false,
                 fromOwner: false,
+                mentions: [],
                 replies: [
                   {
                     id: REPLY_ID,
@@ -375,6 +381,7 @@ describe('/ysocial/inbox with a Facebook Page', () => {
                     likeCount: 0,
                     hidden: false,
                     fromOwner: false,
+                    mentions: [],
                   },
                 ],
               },
@@ -403,6 +410,45 @@ describe('/ysocial/inbox with a Facebook Page', () => {
         expect(call.method).toBe('GET');
         expect(call.url.searchParams.get('access_token')).toBe(pageToken);
       }
+    });
+  });
+
+  describe('mentions (W76)', () => {
+    it('answers the names of message_tags, no ids, and logs no name', async () => {
+      graphHandler = (call) => {
+        const res = defaultGraph(call);
+        if (!call.url.pathname.endsWith(`/${POST}/comments`)) {
+          return res;
+        }
+        return json({
+          data: [
+            {
+              ...thread(),
+              message_tags: [
+                {
+                  id: MENTION_ID,
+                  name: MENTION_PERSON,
+                  type: 'user',
+                  offset: 0,
+                  length: 14,
+                },
+              ],
+            },
+          ],
+          summary: { total_count: 2 },
+        });
+      };
+      const res = await read();
+      expect(res.status).toBe(200);
+      const top = res.json().posts[0].comments[0];
+      // The tag also covers the first 14 characters of the text.
+      expect(top.mentions).toEqual([MENTION_PERSON, 'Erfundener Kom']);
+      expect(top.replies[0].mentions).toEqual([]);
+      expect(res.text).not.toContain(MENTION_ID);
+      expect(res.text).not.toContain('message_tags');
+      expect(logLines).toEqual([
+        `inbox comments channel=${CHANNEL} result=ok posts=2 comments=2`,
+      ]);
     });
   });
 

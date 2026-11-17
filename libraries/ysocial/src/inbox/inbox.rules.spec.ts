@@ -2,6 +2,8 @@ import {
   demoIntegrationIds,
   INBOX_CURSOR_PATTERN,
   INBOX_FACEBOOK_POSTS_PER_PAGE,
+  INBOX_MENTION_MAX_LENGTH,
+  INBOX_MENTIONS_LIMIT,
   INBOX_REPLIES_LIMIT,
   INBOX_TIME_PATTERN,
   InboxOwnershipUnknownError,
@@ -18,6 +20,7 @@ import {
   isInboxCursor,
   isIntegrationId,
   isPlatformId,
+  mentionNames,
   YSOCIAL_DEMO_INTEGRATIONS_ENV,
   YSOCIAL_INBOX_ENABLED_ENV,
 } from './inbox.rules';
@@ -437,5 +440,83 @@ describe('InboxOwnershipUnknownError', () => {
     expect(err).not.toBeInstanceOf(InboxPlatformError);
     expect(err.name).toBe('InboxOwnershipUnknownError');
     expect(err.message).toBe('ownership unknown');
+  });
+});
+
+describe('mentionNames (W76)', () => {
+  it('keeps only strings, no null, number, object, array or boolean', () => {
+    expect(
+      mentionNames([
+        null,
+        undefined,
+        7,
+        {},
+        { name: 'Erika Beispiel' },
+        [],
+        true,
+        'Max Muster',
+      ])
+    ).toEqual(['Max Muster']);
+  });
+
+  it('drops empty names and names of whitespace only', () => {
+    expect(mentionNames(['', ' ', '\t\n', 'Erika Beispiel'])).toEqual([
+      'Erika Beispiel',
+    ]);
+  });
+
+  it('trims', () => {
+    expect(mentionNames(['  Erika Beispiel \n'])).toEqual(['Erika Beispiel']);
+  });
+
+  it('cuts a name of 301 characters to 300', () => {
+    expect(INBOX_MENTION_MAX_LENGTH).toBe(300);
+    const [name] = mentionNames(['a'.repeat(301)]);
+    expect(name).toBe('a'.repeat(300));
+  });
+
+  it('keeps a name of exactly 300 characters', () => {
+    expect(mentionNames(['a'.repeat(300)])).toEqual(['a'.repeat(300)]);
+  });
+
+  it('leaves no single high surrogate at the end of a cut name', () => {
+    const [name] = mentionNames(['a'.repeat(299) + '😀x']);
+    expect(name).toBe('a'.repeat(299));
+    expect(name).toHaveLength(299);
+    expect(name.charCodeAt(name.length - 1)).not.toBeGreaterThanOrEqual(0xd800);
+  });
+
+  it('drops doubles, also those that are equal only after trim or cut', () => {
+    expect(
+      mentionNames([
+        'Erika Beispiel',
+        ' Erika Beispiel ',
+        'Max Muster',
+        'Erika Beispiel',
+      ])
+    ).toEqual(['Erika Beispiel', 'Max Muster']);
+    expect(
+      mentionNames(['a'.repeat(300), 'a'.repeat(301), 'a'.repeat(350)])
+    ).toEqual(['a'.repeat(300)]);
+  });
+
+  it('keeps the order of the input', () => {
+    expect(mentionNames(['Zora', 'Anna', 'Max', 'Anna'])).toEqual([
+      'Zora',
+      'Anna',
+      'Max',
+    ]);
+  });
+
+  it('gives at most 50 of 60 names, the first ones', () => {
+    expect(INBOX_MENTIONS_LIMIT).toBe(50);
+    const names = Array.from({ length: 60 }, (_, i) => `Name ${i}`);
+    const out = mentionNames(names);
+    expect(out).toHaveLength(50);
+    expect(out).toEqual(names.slice(0, 50));
+  });
+
+  it('gives [] for no names', () => {
+    expect(mentionNames([])).toEqual([]);
   });
 });

@@ -1221,6 +1221,7 @@ describe('/ysocial/inbox', () => {
                 likeCount: 2,
                 hidden: false,
                 fromOwner: false,
+                mentions: [],
                 replies: [
                   {
                     id: REPLY_ID,
@@ -1230,6 +1231,7 @@ describe('/ysocial/inbox', () => {
                     likeCount: 0,
                     hidden: false,
                     fromOwner: false,
+                    mentions: [],
                   },
                 ],
               },
