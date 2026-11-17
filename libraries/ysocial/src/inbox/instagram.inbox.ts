@@ -99,7 +99,8 @@ const COMMENT_FIELDS = 'id,text,timestamp,username,like_count,hidden,user';
 const isInstagramId = (value: unknown): value is string =>
   typeof value === 'string' && /^\d{1,64}$/.test(value);
 
-// fromOwner: written by the account of the channel (field user).
+// fromOwner: written by the account of the channel (field user). mentions:
+// none, the hub finds the @handles in the text itself (W76).
 const toReply = (row: GraphObject, accountId: string): InboxReply => ({
   id: String(row.id),
   text: typeof row.text === 'string' ? row.text : '',
@@ -108,6 +109,7 @@ const toReply = (row: GraphObject, accountId: string): InboxReply => ({
   likeCount: count(row.like_count),
   hidden: row.hidden === true,
   fromOwner: String(row.user?.id ?? '') === accountId,
+  mentions: [],
 });
 
 const rows = (value: unknown): GraphObject[] =>

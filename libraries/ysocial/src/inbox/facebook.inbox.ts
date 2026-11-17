@@ -16,6 +16,7 @@ import {
   InboxUsageMeter,
   InboxWindow,
   inboxWindow,
+  mentionNames,
   YsocialInboxProvider,
 } from './inbox.rules';
 import {
@@ -71,6 +72,12 @@ import {
  *   the Page carries the Page id in from.id is not stated: on staging.
  *   https://developers.facebook.com/documentation/pages-api/comments-mentions
  *   https://developers.facebook.com/docs/graph-api/reference/comment
+ * - message_tags (the profiles tagged in message): not in the field list of
+ *   the reference read 17.11.2026, but in the Comment object of Meta's
+ *   Business SDK as list<EntityAtTextRange> with id, name, type, offset and
+ *   length. name, offset and length are read, only name and the tagged part
+ *   of the text leave the fork (W76): on staging (README, ungeprüft).
+ *   https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/comment.py
  * - POST /{comment-id}/comments with message: reply as the Page, Page token
  *   of a person with the task MODERATE, pages_manage_engagement.
  *   https://developers.facebook.com/docs/graph-api/reference/object/comments
@@ -104,7 +111,8 @@ import {
  */
 
 const POST_FIELDS = 'id,permalink_url,created_time,status_type';
-const COMMENT_FIELDS = 'id,message,from,created_time,like_count,is_hidden';
+const COMMENT_FIELDS =
+  'id,message,from,created_time,like_count,is_hidden,message_tags';
 // Top-level comments with their replies (first page of each).
 const THREAD_FIELDS = `${COMMENT_FIELDS},comments.limit(${INBOX_REPLIES_LIMIT}){${COMMENT_FIELDS}}`;
 // The posts of a page of the window with their comments, one call.
@@ -140,17 +148,50 @@ const isPageId = (value: unknown): value is string =>
 const isFacebookId = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 64 && /^\d+(_\d+)?$/.test(value);
 
+// The part of the text a tag covers. A tag shortened to the first name
+// shows only that in the text, while name stays the full name (W76).
+// Assumed: Meta counts offset and length in UTF-16 units, like a JavaScript
+// string (ungeprüft, README). null outside the text or when the part would
+// cut a surrogate pair.
+const taggedText = (message: string, tag: GraphObject) => {
+  const offset = tag?.offset;
+  const length = tag?.length;
+  if (
+    !Number.isInteger(offset) ||
+    !Number.isInteger(length) ||
+    offset < 0 ||
+    length < 1 ||
+    offset + length > message.length
+  ) {
+    return null;
+  }
+  const part = message.slice(offset, offset + length);
+  return /^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(part) ? null : part;
+};
+
 // from.name only, never the Page-scoped id of the person. fromOwner: written
-// by the Page of the channel.
-const toReply = (row: GraphObject, pageId: string): InboxReply => ({
-  id: String(row.id),
-  text: typeof row.message === 'string' ? row.message : '',
-  username: text(row.from?.name),
-  timestamp: text(row.created_time),
-  likeCount: count(row.like_count),
-  hidden: row.is_hidden === true,
-  fromOwner: String(row.from?.id ?? '') === pageId,
-});
+// by the Page of the channel. mentions: per tag of message_tags its name and
+// the part of the text it covers, never an id.
+const toReply = (row: GraphObject, pageId: string): InboxReply => {
+  const message = typeof row.message === 'string' ? row.message : '';
+  return {
+    id: String(row.id),
+    text: message,
+    username: text(row.from?.name),
+    timestamp: text(row.created_time),
+    likeCount: count(row.like_count),
+    hidden: row.is_hidden === true,
+    fromOwner: String(row.from?.id ?? '') === pageId,
+    mentions: mentionNames(
+      Array.isArray(row.message_tags)
+        ? row.message_tags.flatMap((tag: GraphObject) => [
+            tag?.name,
+            taggedText(message, tag),
+          ])
+        : []
+    ),
+  };
+};
 
 const rows = (value: unknown): GraphObject[] =>
   Array.isArray((value as GraphObject)?.data)
