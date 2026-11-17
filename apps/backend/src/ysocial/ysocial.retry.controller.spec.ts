@@ -476,6 +476,85 @@ describe('POST /ysocial/posts/:id/retry', () => {
     });
   });
 
+  describe('repeat post (PR 37)', () => {
+    const HOUR = 60 * 60 * 1000;
+    const repeatPost = (hoursAgo: number, patch = {}) =>
+      postRow({
+        publishDate: new Date(Date.now() - hoursAgo * HOUR),
+        intervalInDays: 7,
+        ...patch,
+      });
+
+    it('QA 1: 409 interval_reanchor 3 hours late, nothing is started or asked', async () => {
+      repository.getPostForRetry.mockResolvedValue(repeatPost(3));
+      const res = await retry();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        statusCode: 409,
+        code: 'interval_reanchor',
+      });
+      nothingStarted();
+      expect(workflowList).not.toHaveBeenCalled();
+      expect(temporalService.client.getRawClient).not.toHaveBeenCalled();
+      const text = logs.mock.calls.flat().join('\n');
+      expect(text).toContain(
+        `retry post=post-1 actor=${ACTOR} result=rejected code=interval_reanchor`
+      );
+      expect(text).not.toContain(CONTENT);
+    });
+
+    it('QA 2: 202 one hour late, queues and starts the workflow', async () => {
+      repository.getPostForRetry.mockResolvedValue(repeatPost(1));
+      const res = await retry();
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ id: 'post-1', state: 'QUEUE' });
+      expect(workflowList).toHaveBeenCalledTimes(1);
+      expect(repository.queueFailedPost).toHaveBeenCalledTimes(1);
+      expect(postsService.startWorkflow).toHaveBeenCalledTimes(1);
+      expect(postsService.startWorkflow).toHaveBeenCalledWith(
+        'facebook',
+        'post-1',
+        'org-1',
+        'QUEUE'
+      );
+    });
+
+    it('202 for a repeat post with a date in the future', async () => {
+      repository.getPostForRetry.mockResolvedValue(repeatPost(-5));
+      expect((await retry()).status).toBe(202);
+      expect(postsService.startWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('202 days late without a repeat (intervalInDays null)', async () => {
+      repository.getPostForRetry.mockResolvedValue(
+        repeatPost(72, { intervalInDays: null })
+      );
+      expect((await retry()).status).toBe(202);
+      expect(postsService.startWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers channel_inactive before interval_reanchor', async () => {
+      repository.getPostForRetry.mockResolvedValue({
+        ...repeatPost(72),
+        integration: { ...repeatPost(72).integration, refreshNeeded: true },
+      });
+      const res = await retry();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: 'channel_inactive' });
+      nothingStarted();
+    });
+
+    it('answers interval_reanchor before unclear_outcome', async () => {
+      repository.getPostForRetry.mockResolvedValue(
+        repeatPost(3, { error: 'socket hang up' })
+      );
+      const res = await retry('post-1', { body: { confirmUnclear: true } });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: 'interval_reanchor' });
+      nothingStarted();
+    });
+  });
+
   describe('unclear outcome', () => {
     beforeEach(() => {
       repository.getPostForRetry.mockResolvedValue(

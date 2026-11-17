@@ -92,6 +92,7 @@ const postRow = {
   parentPostId: null as string | null,
   state: 'ERROR',
   publishDate: new Date('2026-10-27T09:00:00.000Z'),
+  intervalInDays: null as number | null,
   releaseURL: null as string | null,
   error: 'failed: https://graph.facebook.com/x?access_token=EAAGsecret',
   createdAt: new Date('2026-10-26T08:00:00.000Z'),
@@ -388,6 +389,33 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(repository.getPost).not.toHaveBeenCalled();
   });
 
+  it('posts: intervalInDays as a number for a repeat post and null without', async () => {
+    repository.getPosts.mockResolvedValueOnce([
+      { ...postRow, intervalInDays: 7 },
+      { ...postRow, id: 'post-2', intervalInDays: null },
+    ]);
+    const res = await get(
+      '/ysocial/posts?from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z'
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body[0].intervalInDays).toBe(7);
+    expect(body[1].intervalInDays).toBeNull();
+    expect(Object.keys(POST_FIELDS)).toContain('intervalInDays');
+    expect(Object.keys(body[1])).toContain('intervalInDays');
+  });
+
+  it('posts/:id: intervalInDays for the post and its comments', async () => {
+    repository.getPost.mockResolvedValueOnce({ ...postRow, intervalInDays: 7 });
+    const body = await (await get('/ysocial/posts/post-1')).json();
+    expect(body.intervalInDays).toBe(7);
+    expect(
+      body.comments.map(
+        (row: { intervalInDays: unknown }) => row.intervalInDays
+      )
+    ).toEqual([null, null]);
+  });
+
   it('no route ever answers with a forbidden field or a secret value', async () => {
     for (const path of routes) {
       const text = await (await get(path)).text();
@@ -534,9 +562,7 @@ describe('thread order of the comments', () => {
   });
 
   it('ends when the post points at itself', async () => {
-    expect(await thread([{ ...postRow, parentPostId: 'post-1' }])).toEqual(
-      []
-    );
+    expect(await thread([{ ...postRow, parentPostId: 'post-1' }])).toEqual([]);
   });
 
   // The repository sorts the group by createdAt and id, the oldest child

@@ -1,5 +1,6 @@
 import {
   ACTOR_MAX_LENGTH,
+  INTERVAL_REANCHOR_GRACE_MS,
   parseActor,
   postTaskQueue,
   retryDecision,
@@ -216,8 +217,8 @@ describe('retryDecision', () => {
       ...patch.integration,
     },
   });
-  const rejection = (p: RetryPostRow | null | undefined) => {
-    const decision = retryDecision(p);
+  const rejection = (p: RetryPostRow | null | undefined, now?: Date) => {
+    const decision = retryDecision(p, now);
     expect(decision.ok).toBe(false);
     return decision.ok === false ? decision.rejection : undefined;
   };
@@ -303,6 +304,28 @@ describe('retryDecision', () => {
     );
   });
 
+  // PR 37: every earlier code wins over interval_reanchor.
+  it('checks interval_reanchor last, after every earlier code', () => {
+    const dead = { deletedAt: new Date() } as RetryPostRow['integration'];
+    const late = { intervalInDays: 7 };
+    expect(rejection(post({ ...late, deletedAt: new Date() }))?.code).toBe(
+      'deleted'
+    );
+    expect(rejection(post({ ...late, parentPostId: 'x' }))?.code).toBe(
+      'not_first_post'
+    );
+    expect(rejection(post({ ...late, state: 'QUEUE' }))?.code).toBe(
+      'already_queued'
+    );
+    expect(rejection(post({ ...late, state: 'PUBLISHED' }))?.code).toBe(
+      'not_failed'
+    );
+    expect(rejection(post({ ...late, integration: dead }))?.code).toBe(
+      'channel_inactive'
+    );
+    expect(rejection(post(late))?.code).toBe('interval_reanchor');
+  });
+
   // The confirmation is checked by the service, after the check for a
   // running workflow. The decision only hands over the reason.
   it('ok with the reason for an unclear outcome', () => {
@@ -319,6 +342,103 @@ describe('retryDecision', () => {
     const decision = retryDecision(post());
     expect(decision).toEqual({ ok: true, unclear: undefined });
     expect((decision as { unclear?: string }).unclear).toBeUndefined();
+  });
+});
+
+describe('retryDecision: repeat posts (PR 37)', () => {
+  const HOUR = 60 * 60 * 1000;
+  const publishDate = new Date('2026-10-27T09:00:00.000Z');
+  const at = (offsetMs: number) => new Date(publishDate.getTime() + offsetMs);
+  const post = (patch: Partial<RetryPostRow> = {}): RetryPostRow => ({
+    id: 'post-1',
+    organizationId: 'org-1',
+    state: 'ERROR',
+    deletedAt: null,
+    parentPostId: null,
+    publishDate,
+    intervalInDays: 7,
+    releaseId: null,
+    releaseURL: null,
+    error: 'No Post',
+    integration: {
+      providerIdentifier: 'facebook',
+      disabled: false,
+      refreshNeeded: false,
+      inBetweenSteps: false,
+      deletedAt: null,
+    },
+    ...patch,
+  });
+
+  it('the grace period is 2 hours, like REANCHOR_GRACE_MS in Postiz', () => {
+    expect(INTERVAL_REANCHOR_GRACE_MS).toBe(2 * HOUR);
+  });
+
+  it('409 interval_reanchor 2 hours and 1 ms late', () => {
+    expect(retryDecision(post(), at(2 * HOUR + 1))).toEqual({
+      ok: false,
+      rejection: { status: 409, code: 'interval_reanchor' },
+    });
+  });
+
+  it('409 interval_reanchor days late', () => {
+    expect(retryDecision(post(), at(30 * 24 * HOUR))).toEqual({
+      ok: false,
+      rejection: { status: 409, code: 'interval_reanchor' },
+    });
+  });
+
+  it('ok exactly 2 hours late (Postiz still posts at once)', () => {
+    expect(retryDecision(post(), at(2 * HOUR))).toEqual({
+      ok: true,
+      unclear: undefined,
+    });
+  });
+
+  it('ok 1 hour 59 minutes late', () => {
+    expect(retryDecision(post(), at(2 * HOUR - 60 * 1000)).ok).toBe(true);
+  });
+
+  it('ok for a date in the future', () => {
+    expect(retryDecision(post(), at(-3 * HOUR)).ok).toBe(true);
+  });
+
+  it.each([null, 0])(
+    'ok days late without a repeat (intervalInDays %s)',
+    (intervalInDays) => {
+      expect(
+        retryDecision(post({ intervalInDays }), at(10 * 24 * HOUR))
+      ).toEqual({ ok: true, unclear: undefined });
+    }
+  );
+
+  it('keeps the unclear outcome of an allowed repeat post', () => {
+    expect(retryDecision(post({ error: 'socket hang up' }), at(HOUR))).toEqual({
+      ok: true,
+      unclear: 'unconfirmed',
+    });
+    expect(
+      retryDecision(
+        post({ releaseURL: 'https://example.com/p/1' }),
+        at(2 * HOUR)
+      )
+    ).toEqual({ ok: true, unclear: 'published' });
+  });
+
+  it('rejects a late repeat post before it looks at the unclear outcome', () => {
+    expect(
+      retryDecision(post({ error: 'socket hang up' }), at(3 * HOUR)).ok
+    ).toBe(false);
+  });
+
+  it('uses the current time without a second argument', () => {
+    const now = Date.now();
+    expect(
+      retryDecision(post({ publishDate: new Date(now - 3 * HOUR) })).ok
+    ).toBe(false);
+    expect(retryDecision(post({ publishDate: new Date(now - HOUR) })).ok).toBe(
+      true
+    );
   });
 });
 
