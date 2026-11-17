@@ -3,6 +3,7 @@ import {
   tokensMatch,
   YSOCIAL_SERVICE_TOKEN_MIN_LENGTH,
 } from '../service.token';
+import { createHubEvent, HubEvent } from '../events/hub.event';
 
 /**
  * Meta webhooks for the inbox demo (E25, video for pages_manage_metadata
@@ -28,7 +29,25 @@ import {
  *
  * The log keeps ids, field, kind and time. Never message, text, from (name,
  * username or id of the person) or anything else of the value.
+ *
+ * Phase 3, PR 74 (E81, E97): with YSOCIAL_INBOX_EVENTS=true the receiver
+ * works for every Meta channel and rings the bell inbox.webhook at the hub
+ * for each comment, with the same ids, no text and no name. The hub fetches
+ * the channel then (PR 77). The demo log stays for the demo list.
  */
+
+// The receiver exists only with "true" (fail-closed). Also the routes that
+// put our app on the Page of a channel (inbox.rules.ts).
+export const YSOCIAL_INBOX_EVENTS_ENV = 'YSOCIAL_INBOX_EVENTS';
+
+export const inboxEventsEnabled = (env: Record<string, string | undefined>) =>
+  env[YSOCIAL_INBOX_EVENTS_ENV] === 'true';
+
+// The demo log is written only with the demo list. Same rule as
+// inboxDemoEnabled in inbox.rules.ts, which the receiver does not import
+// (ysocial.inbox.no-automation.spec.ts).
+export const demoLogEnabled = (env: Record<string, string | undefined>) =>
+  (env.YSOCIAL_DEMO_INTEGRATIONS || '').split(',').some((id) => !!id.trim());
 
 export const YSOCIAL_META_WEBHOOK_VERIFY_TOKEN_ENV =
   'YSOCIAL_META_WEBHOOK_VERIFY_TOKEN';
@@ -195,4 +214,86 @@ export const webhookEvents = (payload: unknown, now: Date): WebhookEvent[] => {
       }
     )
   );
+};
+
+// Which events ring the bell: comments of a Page (feed, item comment) and of
+// an Instagram account (comments). Reactions, posts and the rest do not.
+export const isCommentEvent = (event: WebhookEvent) =>
+  (event.object === 'page' &&
+    event.field === 'feed' &&
+    event.item === 'comment') ||
+  (event.object === 'instagram' && event.field === 'comments');
+
+// The Postiz provider of the channel an event belongs to: entryId is the id
+// of the Page (facebook) or of the Instagram account (instagram, Facebook
+// Login), the internalId of the channel.
+export const WEBHOOK_PROVIDERS: Record<string, string> = {
+  page: 'facebook',
+  instagram: 'instagram',
+};
+
+// The hub takes ids of at most 300 characters (PR 77).
+export const INBOX_WEBHOOK_ID_MAX = 300;
+
+// Bells per notification of Meta (up to 1000 changes in one). The rest the
+// fetch of the hub finds, within 10 minutes or an hour (E81, E82).
+export const INBOX_WEBHOOK_BELLS_MAX = 50;
+
+export interface WebhookChannel {
+  id: string;
+  organizationId: string;
+  customerId: string | null;
+  providerIdentifier: string;
+}
+
+/**
+ * The bell for one channel: inbox.webhook with the ids of the event, never a
+ * text, a name or a reason (the hub refuses those, 422). Meta events have no
+ * id of their own, so the state is <comment or post>.<verb>.<time in ms>:
+ * the time Meta sent the notification, so a second edit of the same comment
+ * is a new bell. A notification Meta sends again is the same one as long as
+ * Meta keeps its time (unverified). null when the event has no id to fetch
+ * or the id is too long for the hub.
+ */
+export const inboxWebhookEvent = (
+  event: WebhookEvent,
+  channel: WebhookChannel
+): HubEvent | null => {
+  const target = event.commentId ?? event.postId ?? event.mediaId;
+  const at = event.sentAt ?? event.createdAt ?? event.receivedAt;
+  if (!target) {
+    return null;
+  }
+  let bell: HubEvent;
+  try {
+    bell = createHubEvent({
+      kind: 'inbox.webhook',
+      subject: { type: 'channel', id: channel.id },
+      stateKey: `${target}.${event.verb ?? event.field}.${Date.parse(at)}`,
+      occurredAt: at,
+      postiz: {
+        organizationId: channel.organizationId,
+        integrationId: channel.id,
+        customerId: channel.customerId || null,
+        providerIdentifier: channel.providerIdentifier,
+      },
+      data: {
+        object: event.object,
+        entryId: event.entryId,
+        field: event.field,
+        item: event.item,
+        verb: event.verb,
+        postId: event.postId,
+        commentId: event.commentId,
+        parentId: event.parentId,
+        mediaId: event.mediaId,
+        createdAt: event.createdAt,
+        sentAt: event.sentAt,
+        receivedAt: event.receivedAt,
+      },
+    });
+  } catch (err) {
+    return null;
+  }
+  return bell.id.length <= INBOX_WEBHOOK_ID_MAX ? bell : null;
 };

@@ -85,6 +85,7 @@ Arten in diesem Stand:
 | `channel.removed` | `channel` | Ein gemeldeter Kanal wurde in Postiz entfernt | `channel.removed:<integrationId>:<updatedAt beim Melden>` |
 | `channel.token_expiring` | `channel` | `DailyHealth`: Der Zugang läuft in höchstens 7 Tagen ab oder ist abgelaufen. `data.expiresAt`, `data.expired` | `channel.token_expiring:<integrationId>:<Ablauf in ms>` |
 | `health.daily` | `system` (`postiz`) | Sammelereignis von `DailyHealth`, Inhalt unten | `health.daily:postiz:<Tag in Berlin>` |
+| `inbox.webhook` | `channel` | Ab 0.9.8: Meta meldet einen Kommentar an einem Kanal (Webhook). Nur Kennungen, kein Text. Direkt aus dem Backend, ein Versuch, nicht über Temporal. Inhalt unter „Webhooks für die Inbox“ | `inbox.webhook:<integrationId>:<Kommentar>.<verb>.<Zeit in ms>` |
 | `channel.data_deleted` | `channel` | Ab 0.9.5: Der Löschjob hat die Tokens eines getrennten Kanals geleert. Kein Alarm, ein Eintrag fürs Protokoll. Inhalt unter „Löschjob für getrennte Kanäle“ | `channel.data_deleted:<integrationId>:<deletedAt in ms>` |
 
 `post.verified`, `post.unverifiable` und `post.resolved` schließen offene Alarme desselben Posts, `channel.reconnected` und `channel.removed` die des Kanals. Meldet derselbe Prüflauf eine Art ein zweites Mal, hängt an der Kennung `-2`, `-3` und so weiter, außer bei `post.failed`. Bei Post-Ereignissen steht in `data` immer `publishDate` und `state`.
@@ -475,7 +476,7 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - `owner` gibt Meta nur zurück, wenn „the app user making the query also created the media“. Ob das mit dem Page-Token gilt, ist **ungeprüft**. Gilt es nicht, enden alle schreibenden Aufrufe mit 404 `comment_not_found`, ohne etwas zu ändern (fail-closed). PLAN QA 2 auf Staging zeigt es.
 - Je Kommentar liest die Demo nur die erste Seite der Antworten in der Standardgröße von Meta.
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
-- Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf. Anmelden und Empfang ab 0.9.1 im Abschnitt „Webhooks für die Inbox-Demo“ unten.
+- Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf. Anmelden und Empfang ab 0.9.1 im Abschnitt „Webhooks für die Inbox“ unten.
 
 **Facebook** (ab 0.9.0): `libraries/ysocial/src/inbox/facebook.inbox.ts`. Eine Erweiterung der Demo nach E25, kein Produktcode für Phase 3. Anlass: Florian hat am 17.11.2026 entschieden, `pages_read_user_content` und `pages_manage_metadata` in den Meta-Antrag aufzunehmen (Weg 1, postiz#25). Meta verlangt für jedes Recht ein Video, das die Nutzung in der App zeigt. Dieser Teil liefert die Facebook-Kommentare für die Videos zu `pages_read_user_content` und `pages_manage_engagement` (Welle 2, Hub `meta.md` §6). Endpunkte und Rechte laut offizieller Meta-Referenz (gelesen am 17.11.2026, Links im Kopf der Datei):
 
@@ -580,62 +581,101 @@ Abweisungen wie bei der Demo, dazu:
 - Liken: Die Seite muss den Kommentar liken können, laut Meta mit der Aufgabe CREATE_CONTENT, das Zurücknehmen mit MODERATE.
 - Instagram ohne `comments_count` (0) wird ohne Aufruf übersprungen, wie bei der Demo.
 
-## Webhooks für die Inbox-Demo (Backend, ab 0.9.1, nur Staging)
+## Webhooks für die Inbox (Backend, ab 0.9.1 für die Demo, ab 0.9.8 für alle Meta-Kanäle)
 
-Für die Videos zu `pages_manage_metadata` und den Webhook-Feldern `feed` (Seite) und `comments` (Instagram), Hub `meta.md` §6. Drei Teile: die Seite eines Demo-Kanals für Webhooks anmelden, Ereignisse von Meta empfangen, die letzten Ereignisse als Protokoll lesen. Ein Webhook löst nichts aus: keine Antwort, kein Ticket, kein Aufruf bei Meta (Regel 2). Den Text eines Kommentars liest die Demo über die Leseroute oben nach.
+Zuerst gebaut für die Videos zu `pages_manage_metadata` und den Webhook-Feldern `feed` (Seite) und `comments` (Instagram), Hub `meta.md` §6. Ab 0.9.8 (Phase 3, PR 74, E81, E97) für jeden Facebook- und Instagram-Kanal. Vier Teile:
+- die Seite eines Kanals für Webhooks anmelden,
+- Ereignisse von Meta empfangen,
+- je Kommentar die Klingel `inbox.webhook` an den Hub,
+- für die Demo die letzten Ereignisse als Protokoll.
+
+Ein Webhook löst im Fork nichts weiter aus: keine Antwort, kein Ticket, kein Aufruf bei Meta (Regel 2). Den Text eines Kommentars holt der Hub danach über die Inbox-Routen.
 
 | Variable | Wert |
 |---|---|
-| `YSOCIAL_DEMO_INTEGRATIONS` | wie oben. Ohne sie gibt es auch den Empfänger nicht (404) |
-| `YSOCIAL_META_WEBHOOK_VERIFY_TOKEN` | neu. Zufallswert, mindestens 32 Zeichen, zum Beispiel `openssl rand -hex 32`. Derselbe Wert steht im App-Dashboard als „Verify Token“. Fehlt er oder ist er kürzer: Der Empfänger beantwortet die Prüfung von Meta mit 503 |
+| `YSOCIAL_INBOX_EVENTS` | ab 0.9.8. `true`: Es gibt den Empfänger, er klingelt beim Hub, und die Anmelde-Routen gelten für jeden aktiven Meta-Kanal. Jeder andere Wert und eine fehlende Variable: kein Empfänger (404), Anmelden nur für die Demo-Liste. Erst einschalten, wenn der Hub `inbox.webhook` kennt (Hub-PR 77) |
+| `YSOCIAL_DEMO_INTEGRATIONS` | wie oben. Mit ihr schreibt der Empfänger das Protokoll, und es gibt die Route `…/webhooks/events`. Den Empfänger selbst gibt es ab 0.9.8 nur mit `YSOCIAL_INBOX_EVENTS` |
+| `YSOCIAL_META_WEBHOOK_VERIFY_TOKEN` | Zufallswert, mindestens 32 Zeichen, zum Beispiel `openssl rand -hex 32`. Derselbe Wert steht im App-Dashboard als „Verify Token“. Fehlt er oder ist er kürzer: Der Empfänger beantwortet die Prüfung von Meta mit 503. Auf Prod erlaubt, eingetragen erst nach dem App Review (B70) |
 | `FACEBOOK_APP_SECRET` | gibt es schon, Postiz braucht es für Facebook Login. Meta signiert die Webhooks der App damit. Fehlt es: Jedes Ereignis bekommt 503 |
 | `FACEBOOK_APP_ID` | gibt es schon. Daran erkennt die Leseroute unsere App unter den Apps der Seite |
+| `HUB_INTERNAL_URL`, `HUB_INTERNAL_TOKEN` | gibt es schon für den Worker (oben). Backend und Orchestrator laufen im selben Container, die Klingel nimmt dieselben Werte. Fehlt einer: keine Klingel, im Log `bells=not_configured`, Meta bekommt trotzdem 200 |
 
-**Seite anmelden und Stand lesen** (hinter `YsocialInboxDemoGuard` und `YsocialTokenGuard`, Kanal aus `YSOCIAL_DEMO_INTEGRATIONS`, dieselben Prüfungen wie die Inbox-Routen):
+**Seite anmelden und Stand lesen** (hinter `YsocialInboxGuard` und `YsocialTokenGuard`, dieselben Prüfungen wie die Inbox-Routen): Die Routen gibt es mit der Demo-Liste oder mit `YSOCIAL_INBOX_EVENTS=true` (`InboxWebhooksRoute`). Mit dem Schalter gelten sie für jeden aktiven Meta-Kanal, ohne ihn nur für die Demo-Liste. Das Protokoll (`…/webhooks/events`) gibt es nur mit der Demo-Liste (`InboxDemoOnly`). Fehlt die Bedingung, kommt 404 schon vor der Token-Prüfung.
 
 | Route | Wirkung |
 |---|---|
 | `GET /ysocial/inbox/integrations/:id/webhooks` | Ist unsere App auf der Seite? 200 `{"integrationId":"…","provider":"facebook","subscribed":true,"fields":["feed"]}`. Nur der Eintrag unserer App (`FACEBOOK_APP_ID`), nie Namen oder IDs anderer Apps der Seite |
-| `POST /ysocial/inbox/integrations/:id/webhooks` | Meldet die Seite mit dem Feld `feed` an. Ohne Body, mit `X-Ysocial-Actor` wie die anderen schreibenden Routen. 200 `{"integrationId":"…","provider":"…","subscribed":true,"fields":["feed"]}` |
-| `GET /ysocial/inbox/webhooks/events` | Die letzten Ereignisse, neueste zuerst: `{"events":[…],"limit":50,"ttlSeconds":86400}`. Ist Redis nicht erreichbar: 503 `store_unavailable` |
+| `POST /ysocial/inbox/integrations/:id/webhooks` | Meldet die Seite mit dem Feld `feed` an. Ohne Body, mit `X-Ysocial-Actor` wie die anderen schreibenden Routen. 200 `{"integrationId":"…","provider":"…","subscribed":true,"fields":["feed"]}`. Auslösen darf es im Studio nur ein Admin (E97), das prüft der Hub |
+| `GET /ysocial/inbox/webhooks/events` | Nur mit der Demo-Liste. Die letzten Ereignisse, neueste zuerst: `{"events":[…],"limit":50,"ttlSeconds":86400}`. Ist Redis nicht erreichbar: 503 `store_unavailable` |
 
 - Facebook: `POST /{page-id}/subscribed_apps` mit `subscribed_fields=feed`, `GET` derselben Kante für den Stand. Rechte laut Referenz: Page-Token einer Person mit Aufgabe CREATE_CONTENT, MANAGE oder MODERATE, `pages_manage_metadata` und `pages_show_list`. Antwort `{"success": true}`. Die Einstellungen der Seite ändern sich dabei nicht.
 - Instagram (Facebook Login): Kommentar-Webhooks kommen über die verknüpfte Seite. Die Route meldet die verknüpfte Seite mit `feed` an, mit dem Page-Token über `/me`. `comments` wählst du im App-Dashboard. Rechte laut Meta für `comments`: `instagram_basic`, `instagram_manage_comments`, `pages_manage_metadata`, `pages_read_engagement`, `pages_show_list`. Dazu kommen Advanced Access, App auf Live und ein öffentliches Instagram-Konto. Meta widerspricht sich bei diesem Schritt, deshalb ist `feed` hier eine **Annahme**:
   - Der Instagram-Leitfaden „Set up Instagram Webhooks“ (Abschnitt Facebook credentials) sagt: „Send a `POST` request to the linked Page's `/subscribed_apps` edge.“ und „You can use `/me` when the token represents the linked Facebook Page.“ Den Weg über `/me` belegt das. Derselbe Abschnitt verlangt aber: „Set `<WEBHOOK_FIELDS>` to the fields selected in the App Dashboard.“
   - Die Referenz von `subscribed_apps` sagt: „You cannot use the subscribed_fields parameter to configure or subscribe to Webhooks for Instagram. You must use your app dashboard to subscribe to Instagram Webhooks.“ Instagram-Felder wie `comments` stehen auch nicht in der Liste erlaubter Werte.
   - Die Route schickt deshalb das Seitenfeld `feed`, damit unsere App auf der verknüpften Seite ist. Ob Meta damit Instagram-Kommentare zustellt und ob ein `POST` die Feldliste ersetzt oder ergänzt, sagt keine der beiden Seiten. **Ungeprüft**. Vor Advanced Access lässt sich nur prüfen, ob `GET …/webhooks` danach `"subscribed":true` zeigt.
-- Antworten und Fehler wie bei den Inbox-Routen: 400 `actor_missing`, 403 `not_demo_integration`, 404 `not_found`, 409 `channel_inactive` oder `provider_not_supported`, 502 `platform_error`, 503 `platform_unavailable`. Beim Anmelden 503 `outcome_unknown`, wenn Meta keine klare Antwort gibt. Ein zweiter Versuch schadet nicht, das Anmelden ist idempotent.
+- Antworten und Fehler wie bei den Inbox-Routen: 400 `actor_missing`, 403 `not_demo_integration` (ohne Schalter für einen Kanal außerhalb der Demo-Liste), 404 `not_found`, 409 `channel_inactive` oder `provider_not_supported`, 502 `platform_error`, 503 `platform_unavailable`. Beim Anmelden 503 `outcome_unknown`, wenn Meta keine klare Antwort gibt. Ein zweiter Versuch schadet nicht, das Anmelden ist idempotent.
 - Log: `inbox webhooks channel=<id> result=ok subscribed=<true|false> fields=<…>` und `inbox subscribe channel=<id> actor=<…> result=<done|rejected code=…>`.
 
-**Empfänger** (für Meta, öffentlich): `GET` und `POST /ysocial-meta-webhook`, von außen `https://<Postiz-Host>/api/ysocial-meta-webhook`. Der Pfad liegt bewusst außerhalb von `/ysocial/`, denn der Reverse Proxy sperrt `/api/ysocial/*` nach außen. Er enthält kein `/auth`. Die Basic Auth von Staging braucht eine Ausnahme genau für diesen Pfad, verankert und mit Schreibweise wie hier, im Caddyfile des Hubs etwa `@needs_auth not path_regexp ^/(uploads|integrations/social)/|^/api/ysocial-meta-webhook$`. Express leitet auch `/api/YSOCIAL-META-WEBHOOK` und `/api/ysocial-meta-webhook/` auf den Empfänger. Mit dem verankerten Ausdruck bleiben diese Varianten hinter der Basic Auth. Die Sperre `(?i)^/api/ysocial(/|$)` trifft den Pfad nicht, denn auf `ysocial` folgt `-`. Auf Prod gibt es den Empfänger nicht (404 ohne Demo-Liste).
+**Empfänger** (für Meta, öffentlich): `GET` und `POST /ysocial-meta-webhook`, von außen `https://<Postiz-Host>/api/ysocial-meta-webhook`.
+- Der Pfad liegt bewusst außerhalb von `/ysocial/`, denn der Reverse Proxy sperrt `/api/ysocial/*` nach außen. Er enthält kein `/auth`.
+- Die Basic Auth von Staging braucht eine Ausnahme genau für diesen Pfad, verankert und mit Schreibweise wie hier, im Caddyfile des Hubs etwa `@needs_auth not path_regexp ^/(uploads|integrations/social)/|^/api/ysocial-meta-webhook$`. Express leitet auch `/api/YSOCIAL-META-WEBHOOK` und `/api/ysocial-meta-webhook/` auf den Empfänger. Mit dem verankerten Ausdruck bleiben diese Varianten hinter der Basic Auth. Die Sperre `(?i)^/api/ysocial(/|$)` trifft den Pfad nicht, denn auf `ysocial` folgt `-`.
+- Ohne `YSOCIAL_INBOX_EVENTS=true` gibt es den Empfänger nicht (404). Auf Prod kommt er erst nach dem App Review (E97): Schalter an, Verify Token gesetzt, Prod-Adresse im App-Dashboard (B70). Bis dahin öffnet Caddy die Route nur auf Staging.
 
-Die Guards laufen in dieser Reihenfolge: `YsocialInboxDemoGuard` (ohne Demo-Liste 404), dann `YsocialMetaWebhookGuard` statt `YsocialTokenGuard`. Das ist eine Ausnahme von der Fork-Regel, weil Meta den Service-Token nicht schicken kann. `ysocial.token.guard.spec.ts` lässt sie nur für genau diesen Controller zu und verlangt dort genau zwei Handler (`GET` und `POST` auf dem Pfad selbst). Andere Methoden als `GET`, `HEAD` und `POST` weist der Guard ab.
+Die Guards laufen in dieser Reihenfolge: `YsocialInboxEventsGuard` (ohne Schalter 404), dann `YsocialMetaWebhookGuard` statt `YsocialTokenGuard`. Das ist eine Ausnahme von der Fork-Regel, weil Meta den Service-Token nicht schicken kann. `ysocial.token.guard.spec.ts` lässt sie nur für genau diesen Controller zu und verlangt dort genau zwei Handler (`GET` und `POST` auf dem Pfad selbst). Andere Methoden als `GET`, `HEAD` und `POST` weist der Guard ab.
 
 | Anfrage | Prüfung | Antwort |
 |---|---|---|
 | `GET ?hub.mode=subscribe&hub.verify_token=…&hub.challenge=…` (Prüfung beim Speichern im App-Dashboard) | `hub.verify_token` gleich `YSOCIAL_META_WEBHOOK_VERIFY_TOKEN`, Vergleich in konstanter Zeit. `hub.challenge` nur Ziffern (laut Referenz „an int“) | 200 mit `hub.challenge` als Text. Token fehlt in der Umgebung: 503. Falsch, fehlt oder anderer `hub.mode`: 403 |
-| `POST` mit JSON (Ereignis) | `X-Hub-Signature-256: sha256=<hex>` gleich HMAC-SHA256 des Rohkörpers mit `FACEBOOK_APP_SECRET`, Vergleich in konstanter Zeit. Den Rohkörper liefert Nest, weil Postiz in `apps/backend/src/main.ts` `rawBody: true` setzt (so auch Stripe) | 200 `{"received":<n>}`, auch wenn nichts gespeichert werden konnte, denn Meta würde nur dasselbe noch einmal schicken. Secret fehlt: 503. Kopf fehlt oder Signatur falsch: 401 |
+| `POST` mit JSON (Ereignis) | `X-Hub-Signature-256: sha256=<hex>` gleich HMAC-SHA256 des Rohkörpers mit `FACEBOOK_APP_SECRET`, Vergleich in konstanter Zeit. Den Rohkörper liefert Nest, weil Postiz in `apps/backend/src/main.ts` `rawBody: true` setzt (so auch Stripe) | 200 `{"received":<n>}`, auch wenn nichts gespeichert oder geklingelt werden konnte, denn Meta würde nur dasselbe noch einmal schicken. Secret fehlt: 503. Kopf fehlt oder Signatur falsch: 401 |
 
 Quelle: Meta, „Get started with webhooks“ (Verification Requests, Validating Payloads, Antwort 200, Wiederholung bis 36 Stunden, Ereignisse können doppelt kommen), gelesen am 17.11.2026. Links im Kopf von `libraries/ysocial/src/webhooks/webhook.rules.ts`.
 
-**Protokoll:** Je Änderung (`entry[].changes[]`) ein Eintrag in Redis unter `ysocial:demo:meta-webhook-events`. Die Liste hält die letzten 50 Einträge und verfällt 24 Stunden nach dem letzten. Es gibt keine Tabelle.
+Aus jeder Änderung (`entry[].changes[]`) macht der Empfänger ein Ereignis mit diesen Feldern, für Protokoll und Klingel gleich:
 
     {"receivedAt":"…","object":"page","entryId":"<Seite>","sentAt":"…","field":"feed","item":"comment","verb":"add","postId":"<Seite>_<Post>","commentId":"<Post>_<Kommentar>","parentId":"<Seite>_<Post>","mediaId":null,"createdAt":"…"}
 
-- `object` ist `page` oder `instagram`, `entryId` die Seiten-ID oder die ID des Instagram-Kontos. Benachrichtigungen anderer Objekte der App (etwa `user` oder `permissions`, dort wäre `entry.id` die ID einer Person) speichert der Empfänger nicht, er antwortet 200 und loggt `ignored`.
+- `object` ist `page` oder `instagram`, `entryId` die Seiten-ID oder die ID des Instagram-Kontos. Benachrichtigungen anderer Objekte der App (etwa `user` oder `permissions`, dort wäre `entry.id` die ID einer Person) verarbeitet der Empfänger nicht, er antwortet 200 und loggt `ignored`.
 - `item` und `verb` gibt es nur beim Seiten-Feld `feed`, etwa `comment`/`add`, `comment`/`hide` oder `reaction`/`add`.
 - Bei Instagram `comments` stehen `commentId` (`comment_id`, sonst `id`), `parentId` und `mediaId`.
 - Zeiten von Meta (Unix-Sekunden) stehen als ISO-Datum darin. Felder mit unerwartetem Wert stehen auf `null`.
-- Nie gespeichert und nie im Log: `message`, `text`, `from` (Name, Nutzername, ID der Person) und alle übrigen Felder von `value`.
-- Log: `meta webhook object=<page|instagram|-> events=<n> fields=<…> result=<recorded|ignored|store_failed error=…>`. Abgewiesene Anfragen: `meta webhook <verify|receive> result=rejected code=<not_configured|verify_invalid|signature_missing|signature_invalid>`. Weder Token noch Signatur stehen darin.
+- Nie gespeichert, nie gesendet und nie im Log: `message`, `text`, `from` (Name, Nutzername, ID der Person) und alle übrigen Felder von `value`.
+
+**Klingel** (ab 0.9.8, nur mit `YSOCIAL_INBOX_EVENTS=true`):
+- Es klingeln nur Kommentare: Seiten-Feld `feed` mit `item` `comment` (alle `verb`, also auch bearbeitet, verborgen, gelöscht) und das Instagram-Feld `comments`. Reaktionen, Posts und alles andere klingeln nicht.
+- Der Kanal: `entryId` ist die `internalId` des Kanals, bei `page` mit Provider `facebook`, bei `instagram` mit Provider `instagram` (Facebook Login). Der Empfänger sucht über alle Organisationen, ohne gelöschte und abgeschaltete Kanäle, ohne Token (`libraries/ysocial/src/database/ysocial.webhook.repository.ts`). Ist dieselbe Seite in mehreren Organisationen verbunden, klingelt es je Kanal. Ohne passenden Kanal klingelt nichts, im Log zählt `unknown_channel`.
+- Je Kanal ein Ereignis an `POST {HUB_INTERNAL_URL}/api/internal/events`, im selben Format wie die übrigen Ereignisse (oben):
+
+      {
+        "id": "inbox.webhook:<integrationId>:<Kommentar>.<verb>.<Zeit in ms>",
+        "version": 1, "kind": "inbox.webhook", "occurredAt": "…", "source": "postiz",
+        "subject": { "type": "channel", "id": "<integrationId>" },
+        "postiz": { "organizationId": "…", "integrationId": "…", "customerId": "…", "providerIdentifier": "facebook" },
+        "data": { "object": "page", "entryId": "…", "field": "feed", "item": "comment", "verb": "add", "postId": "…", "commentId": "…", "parentId": "…", "mediaId": null, "createdAt": "…", "sentAt": "…", "receivedAt": "…" }
+      }
+
+- `data` trägt genau die Felder des Ereignisses oben, jeweils `null` oder eine Kennung ohne Leerraum. Kein `reason`, kein Text, kein Name. Der Hub weist alles andere mit 422 ab.
+- Kennung: Meta-Ereignisse haben keine eigene ID. Der Zustand ist deshalb `<Kommentar>.<verb>.<Zeit in ms>` (ohne Kommentar die Post- oder Medien-ID, ohne `verb` das Feld, also `comments` bei Instagram). Die Zeit ist `sentAt`, sonst `createdAt`, sonst `receivedAt`. Eine zweite Bearbeitung desselben Kommentars ist damit eine neue Klingel. Eine Benachrichtigung, die Meta wiederholt, ergibt dieselbe Kennung, solange Meta dabei dieselbe Zeit schickt (unten unter Ungeprüftes). Höchstens 300 Zeichen, sonst klingelt dieses Ereignis nicht. Dieselbe Kennung geht als `Idempotency-Key`.
+- Ein Versuch, kein Temporal, keine Wiederholung. Je Benachrichtigung höchstens 50 Klingeln (`INBOX_WEBHOOK_BELLS_MAX`), sie laufen nebeneinander, je höchstens 5 s. Den Rest zählt der Log als `dropped`, ihn findet der Abruf. Meta bekommt 200, auch wenn der Hub nicht antwortet. Eine verlorene oder verworfene Klingel fängt der Abruf des Hubs (E81): unter Posts der letzten 30 Tage nach höchstens 10 Minuten, unter älteren nach höchstens einer Stunde (E82, W60).
+- Der Hub antwortet 202 mit `outcome` (`requested`, `coalesced`, `duplicate`, `unknown_channel`) und legt eine Abrufanfrage an (Hub-PR 77). Der Fork wertet die Antwort nicht weiter aus.
+
+**Protokoll** (nur mit `YSOCIAL_DEMO_INTEGRATIONS`): Je Ereignis ein Eintrag in Redis unter `ysocial:demo:meta-webhook-events`, mit dem Inhalt oben. Die Liste hält die letzten 50 Einträge und verfällt 24 Stunden nach dem letzten. Es gibt keine Tabelle. Ohne Demo-Liste schreibt der Empfänger nichts in Redis.
+
+**Log:** `meta webhook object=<page|instagram|-> events=<n> fields=<…> result=<recorded|not_logged|store_failed error=…> bells=<n> delivered=<n> failed=<n> unknown_channel=<n> dropped=<n>`.
+- `not_logged`: ohne Demo-Liste, das Protokoll bleibt leer.
+- `result=ignored` ohne weiteren Teil: Die Benachrichtigung enthielt kein Ereignis von `page` oder `instagram`.
+- Statt der Zahlen auch `bells=0` (kein Kommentar oder Schalter aus), `bells=not_configured` (Hub nicht konfiguriert) oder `bells=failed error=<Fehlerklasse>` (etwa Datenbank).
+- Abgewiesene Anfragen: `meta webhook <verify|receive> result=rejected code=<not_configured|verify_invalid|signature_missing|signature_invalid>`.
+- Weder Token noch Signatur noch Kennungen von Personen stehen darin.
 
 **Grenzen und Ungeprüftes**
-- Webhooks einer App kommen an genau einen Endpunkt (`meta.md` 2.6). Gilt für die App von Staging.
+- Webhooks einer App kommen an genau einen Endpunkt (`meta.md` 2.6). Trägst du nach dem Review die Prod-Adresse ein (B70), bekommt Staging mit derselben App keine Ereignisse mehr. Staging prüft dann mit Mock.
 - Feed-Ereignisse von Personen ohne Rolle in der App kommen vor Advanced Access vermutlich nicht an (`meta.md` §1, Punkt 4). Instagram-Kommentare gibt es nur mit Advanced Access und Live-App. **Ungeprüft**.
-- Ob die Testnachricht des App-Dashboards (Knopf „Test“) signiert ist wie ein echtes Ereignis, ist **ungeprüft**. Ihre IDs sind Beispielwerte.
-- Express liest JSON bis 100 KB (Vorgabe von Nest). Meta bündelt bis zu 1000 Änderungen in einer Anfrage. Ein größerer Body endet mit 413 vor der Signaturprüfung, Meta wiederholt dann. Für die Demo reicht das.
+- Ob die Testnachricht des App-Dashboards (Knopf „Test“) signiert ist wie ein echtes Ereignis, ist **ungeprüft**. Ihre IDs sind Beispielwerte, dazu gibt es also meist keinen Kanal (`unknown_channel`).
+- Express liest JSON bis 100 KB (Vorgabe von Nest). Meta bündelt bis zu 1000 Änderungen in einer Anfrage. Ein größerer Body endet mit 413 vor der Signaturprüfung, Meta wiederholt dann bis zu 36 Stunden ohne Erfolg. Die Kommentare darin findet nur der Abruf (E81). Das ist bewusst so, eine höhere Grenze für diesen Pfad wäre ein Patch in `apps/backend/src/main.ts`. Ob Meta einen Endpunkt nach wiederholten 413 drosselt, ist **ungeprüft**.
+- Zwei Benachrichtigungen zum selben Kommentar mit demselben `verb` in derselben Sekunde ergeben dieselbe Kennung, der Hub zählt sie einmal. Der Abruf findet den Stand trotzdem.
 - Je Ereignis ein `RPUSH`, dann `LTRIM` und `EXPIRE`, nicht in einer Transaktion. Bricht Redis dazwischen ab, bleibt die Liste bis zum nächsten Ereignis ohne Ablaufzeit. Lokal ohne `REDIS_URL` nutzt Postiz einen Ersatz ohne `LTRIM`, dort loggt jeder Empfang `store_failed`.
 - Ein Ereignis, das Meta doppelt schickt, steht doppelt im Protokoll.
+- Ob Meta bei einer Wiederholung dieselbe Zeit (`entry.time`) schickt, ist **ungeprüft**. Sonst klingelt es ein zweites Mal, der Hub fasst beides zusammen (`coalesced`).
 
 ## LinkedIn-Seiten ohne OpenID Connect (PR 39, Patch 7)
 

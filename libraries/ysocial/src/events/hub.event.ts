@@ -29,6 +29,9 @@ export const HUB_EVENT_KINDS = [
   'health.daily',
   // Deletion of disconnected channels (Datenschutz D1)
   'channel.data_deleted',
+  // Bell of the Meta webhooks, ids only (Phase 3, PR 74). The hub fetches
+  // the channel then.
+  'inbox.webhook',
 ] as const;
 
 export type HubEventKind = (typeof HUB_EVENT_KINDS)[number];

@@ -23,21 +23,26 @@ import {
   YSOCIAL_DEMO_INTEGRATIONS_ENV,
   YsocialInboxProvider,
 } from './inbox.rules';
+import { inboxEventsEnabled } from '../webhooks/webhook.rules';
 import { InstagramInbox } from './instagram.inbox';
 import { FacebookInbox } from './facebook.inbox';
 
 type Rejection = { status: number; code: string; [field: string]: unknown };
 type Log = (result: string) => void;
 
-// demo: only channels of YSOCIAL_DEMO_INTEGRATIONS (webhooks of the demo).
-// inbox: those, and with YSOCIAL_INBOX_ENABLED=true every channel (PR 73).
-type Scope = 'demo' | 'inbox';
+// inbox: channels of YSOCIAL_DEMO_INTEGRATIONS, and with
+// YSOCIAL_INBOX_ENABLED=true every channel (PR 73). webhooks: those of the
+// demo list, and with YSOCIAL_INBOX_EVENTS=true every channel (PR 74).
+type Scope = 'inbox' | 'webhooks';
+
+const SCOPE_SWITCH: Record<Scope, (env: NodeJS.ProcessEnv) => boolean> = {
+  inbox: inboxEnabled,
+  webhooks: inboxEventsEnabled,
+};
 
 const allowedFor = (integrationId: string, scope: Scope) =>
   isDemoIntegration(process.env, integrationId) ||
-  (scope === 'inbox' &&
-    inboxEnabled(process.env) &&
-    isIntegrationId(integrationId));
+  (SCOPE_SWITCH[scope](process.env) && isIntegrationId(integrationId));
 
 const usageLog = (usage?: InboxUsageMeter) =>
   usage?.usage ? ` usage=${usage.usage.percent}` : '';
@@ -116,7 +121,7 @@ export class YsocialInboxService {
     return this.guarded(log, async () => {
       const { provider, channel } = await this.channelFor(
         integrationId,
-        listed,
+        'inbox',
         log
       );
       const posts = await this.platform(log, () =>
@@ -225,7 +230,7 @@ export class YsocialInboxService {
       );
 
     return this.guarded(log, async () => {
-      const { provider } = await this.channelFor(integrationId, listed, log);
+      const { provider } = await this.channelFor(integrationId, 'inbox', log);
       log('ok');
       return {
         integrationId,
@@ -247,7 +252,7 @@ export class YsocialInboxService {
     return this.guarded(log, async () => {
       const { provider, channel } = await this.channelFor(
         integrationId,
-        listed,
+        'inbox',
         log
       );
       const now = new Date();
@@ -293,7 +298,7 @@ export class YsocialInboxService {
     return this.guarded(log, async () => {
       const { provider, channel } = await this.channelFor(
         integrationId,
-        listed,
+        'inbox',
         log,
         () =>
           validComment ? undefined : { status: 400, code: 'invalid_comment_id' }
@@ -323,9 +328,10 @@ export class YsocialInboxService {
   }
 
   // Whether our app is on the Page of the channel, with which Page fields
-  // (PR B). Read only. Only for the demo list, every channel with PR 74.
+  // (PR B). Read only. The demo list, and with YSOCIAL_INBOX_EVENTS=true
+  // every channel (PR 74).
   async getWebhooks(integrationId: string) {
-    const listed = allowedFor(integrationId, 'demo');
+    const listed = allowedFor(integrationId, 'webhooks');
     const log: Log = (result) =>
       this._logger.log(
         `inbox webhooks channel=${
@@ -336,7 +342,7 @@ export class YsocialInboxService {
     return this.guarded(log, async () => {
       const { provider, channel } = await this.channelFor(
         integrationId,
-        listed,
+        'webhooks',
         log
       );
       const { subscribed, fields } = await this.platform(log, () =>
@@ -352,8 +358,10 @@ export class YsocialInboxService {
     });
   }
 
-  // Puts our app on the Page of the channel with the field feed (PR B). A
-  // write at Meta like a reply: only on a call of a person, with the actor.
+  // Puts our app on the Page of the channel with the field feed (PR B), for
+  // every channel with YSOCIAL_INBOX_EVENTS=true (PR 74). A write at Meta
+  // like a reply: only on a call of a person, with the actor. The hub lets
+  // only an admin trigger it (E97).
   subscribeWebhooks(integrationId: string, actorHeader: string | undefined) {
     return this.write(
       'subscribe',
@@ -369,7 +377,7 @@ export class YsocialInboxService {
           fields,
         };
       },
-      { scope: 'demo' }
+      { scope: 'webhooks' }
     );
   }
 
@@ -419,7 +427,7 @@ export class YsocialInboxService {
     return this.guarded(log, async () => {
       const { provider, channel } = await this.channelFor(
         integrationId,
-        listed,
+        scope,
         log,
         () => {
           if (!validComment) {
@@ -465,7 +473,7 @@ export class YsocialInboxService {
   // the database), channel in Postiz, active, provider with an inbox.
   private async channelFor(
     integrationId: string,
-    listed: boolean,
+    scope: Scope,
     log: Log,
     precheck: () => Rejection | undefined = () => undefined
   ) {
@@ -474,10 +482,10 @@ export class YsocialInboxService {
       return rejection(body);
     };
 
-    // Not listed and no inbox switch (or the webhook routes of the demo).
-    // With the switch an id that is no Postiz id gets here as well.
-    if (!listed) {
-      if (inboxEnabled(process.env) && !isIntegrationId(integrationId)) {
+    // Not listed and without the switch of the scope. With the switch an id
+    // that is no Postiz id gets here as well.
+    if (!allowedFor(integrationId, scope)) {
+      if (SCOPE_SWITCH[scope](process.env) && !isIntegrationId(integrationId)) {
         throw reject({ status: 404, code: 'not_found' });
       }
       throw reject({

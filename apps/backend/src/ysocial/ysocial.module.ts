@@ -9,6 +9,7 @@ import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialTestRoutesGuard } from './ysocial.test.routes.guard';
 import { YsocialInboxDemoGuard } from './ysocial.inbox.demo.guard';
 import { YsocialInboxGuard } from './ysocial.inbox.guard';
+import { YsocialInboxEventsGuard } from './ysocial.inbox.events.guard';
 import { YsocialMetaWebhookGuard } from './ysocial.meta.webhook.guard';
 import { YsocialStatusService } from './ysocial.status.service';
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
@@ -19,6 +20,7 @@ import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/heal
 import { YsocialInboxService } from '../../../../libraries/ysocial/src/inbox/ysocial.inbox.service';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 // Entry point for all ysocial backend code. Imported once in
@@ -41,6 +43,7 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialTestRoutesGuard,
     YsocialInboxDemoGuard,
     YsocialInboxGuard,
+    YsocialInboxEventsGuard,
     YsocialMetaWebhookGuard,
     YsocialStatusService,
     YsocialReadService,
@@ -51,6 +54,7 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialInboxService,
     YsocialInboxRepository,
     YsocialMetaWebhookService,
+    YsocialWebhookRepository,
   ],
 })
 export class YsocialModule {}

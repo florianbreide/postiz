@@ -1,4 +1,5 @@
 import { isServiceTokenConfigured } from '../service.token';
+import { HubClientConfig } from '../events/hub.client';
 
 /**
  * Configuration of the ysocial Temporal worker in the orchestrator (PLAN E33).
@@ -129,4 +130,16 @@ export const readYsocialWorkerConfig = (
       hubToken: hubToken!.trim(),
     },
   };
+};
+
+// The hub for events sent outside the worker: the bell of the Meta webhooks
+// from the backend (Phase 3, PR 74). Same variables and checks as for the
+// worker, without Temporal. undefined: not configured, no bell (fail-closed).
+export const readHubClientConfig = (env: Env): HubClientConfig | undefined => {
+  const hub = readHubUrl(env[HUB_INTERNAL_URL_ENV]);
+  const hubToken = env[HUB_INTERNAL_TOKEN_ENV];
+  if (hub.problem || !isServiceTokenConfigured(hubToken)) {
+    return undefined;
+  }
+  return { hubUrl: hub.url!, hubToken: hubToken!.trim() };
 };
