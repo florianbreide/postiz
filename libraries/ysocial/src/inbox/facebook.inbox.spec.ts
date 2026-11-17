@@ -133,7 +133,8 @@ describe('FacebookInbox', () => {
         'order',
         'summary',
       ]);
-      const fields = 'id,message,from,created_time,like_count,is_hidden';
+      const fields =
+        'id,message,from,created_time,like_count,is_hidden,message_tags';
       expect(url.searchParams.get('fields')).toBe(
         `${fields},comments.limit(25){${fields}}`
       );
@@ -202,6 +203,7 @@ describe('FacebookInbox', () => {
               likeCount: 4,
               hidden: true,
               fromOwner: false,
+              mentions: [],
               replies: [
                 {
                   id: REPLY,
@@ -211,6 +213,7 @@ describe('FacebookInbox', () => {
                   likeCount: 1,
                   hidden: false,
                   fromOwner: false,
+                  mentions: [],
                 },
               ],
             },
@@ -290,6 +293,7 @@ describe('FacebookInbox', () => {
         likeCount: 0,
         hidden: false,
         fromOwner: false,
+        mentions: [],
         replies: [],
       };
       expect(posts[0].comments).toEqual([
@@ -522,7 +526,8 @@ describe('FacebookInbox', () => {
   });
 
   describe('listItems (PR 73)', () => {
-    const FIELDS = 'id,message,from,created_time,like_count,is_hidden';
+    const FIELDS =
+      'id,message,from,created_time,like_count,is_hidden,message_tags';
     const POST_3 = `${PAGE}_200000000000003`;
     const COMMENT_3 = '200000000000003_300000000000003';
     const meter = () => new InboxUsageMeter();
@@ -620,6 +625,7 @@ describe('FacebookInbox', () => {
           likeCount: 3,
           hidden: false,
           fromOwner: false,
+          mentions: [],
         },
         expect.objectContaining({ id: REPLY, postId: POST, parentId: COMMENT }),
       ]);
@@ -1462,7 +1468,8 @@ describe('FacebookInbox', () => {
   });
 
   describe('getConversation with postId (PR 73)', () => {
-    const FIELDS = 'id,message,from,created_time,like_count,is_hidden';
+    const FIELDS =
+      'id,message,from,created_time,like_count,is_hidden,message_tags';
     const THREAD = `${FIELDS},comments.limit(25){${FIELDS}},parent{id}`;
     const day = (offset: number) =>
       new Date(NOW - offset * 86_400_000).toISOString();
@@ -1934,6 +1941,510 @@ describe('FacebookInbox', () => {
       await expect(
         inbox.ownsComment(channel, COMMENT, POST)
       ).rejects.toBeInstanceOf(InboxOwnershipUnknownError);
+    });
+  });
+
+  describe('mentions (W76)', () => {
+    const FIELDS =
+      'id,message,from,created_time,like_count,is_hidden,message_tags';
+    const PERSON = 'Erika Beispiel';
+    const SIDE = 'Beispiel Werkstatt';
+    const day = (offset: number) =>
+      new Date(NOW - offset * 86_400_000).toISOString();
+    const window = (): InboxWindow => ({
+      since: null,
+      postsFrom: new Date(NOW - 30 * 86_400_000),
+      postsBefore: null,
+      cursor: null,
+    });
+    const tags = [
+      {
+        id: '600000000000001',
+        name: PERSON,
+        type: 'user',
+        offset: 0,
+        length: 14,
+      },
+      {
+        id: '600000000000002',
+        name: SIDE,
+        type: 'page',
+        offset: 20,
+        length: 18,
+      },
+    ];
+    const feedWith = (comment: Record<string, unknown>) => () =>
+      json({
+        data: [
+          { id: POST, created_time: day(1), comments: { data: [comment] } },
+        ],
+      });
+
+    it('maps message_tags of a person and a Page to their names, no id, offset or type', async () => {
+      respond(feedWith({ id: COMMENT, message_tags: tags }));
+      const page = await inbox.listItems(
+        channel,
+        window(),
+        new InboxUsageMeter()
+      );
+      expect(page.items[0].mentions).toEqual([PERSON, SIDE]);
+      const text = JSON.stringify(page);
+      expect(text).not.toContain('600000000000001');
+      expect(text).not.toContain('600000000000002');
+      expect(text).not.toContain('offset');
+      expect(text).not.toContain('"type"');
+      expect(text).not.toContain('message_tags');
+    });
+
+    it('gives the replies their own mentions', async () => {
+      respond(
+        feedWith({
+          id: COMMENT,
+          message_tags: [tags[0]],
+          comments: {
+            data: [{ id: REPLY, message_tags: [tags[1]] }, { id: `${REPLY}1` }],
+          },
+        })
+      );
+      const page = await inbox.listItems(
+        channel,
+        window(),
+        new InboxUsageMeter()
+      );
+      expect(page.items.map((item) => [item.id, item.mentions])).toEqual([
+        [COMMENT, [PERSON]],
+        [REPLY, [SIDE]],
+        [`${REPLY}1`, []],
+      ]);
+    });
+
+    it('gives mentions [] for a missing message_tags, a non-array and entries without a name', async () => {
+      const cases: unknown[] = [
+        undefined,
+        null,
+        'Erika Beispiel',
+        { name: PERSON },
+        7,
+        [],
+        [
+          { id: '1' },
+          { name: null },
+          { name: 5 },
+          { name: '  ' },
+          null,
+          'x',
+          {},
+        ],
+      ];
+      for (const message_tags of cases) {
+        respond(feedWith({ id: COMMENT, message_tags }));
+        const page = await inbox.listItems(
+          channel,
+          window(),
+          new InboxUsageMeter()
+        );
+        expect(page.items[0].mentions).toEqual([]);
+      }
+    });
+
+    it('keeps the names of valid entries next to broken ones, without doubles', async () => {
+      respond(
+        feedWith({
+          id: COMMENT,
+          message_tags: [
+            { id: '1' },
+            { name: ` ${PERSON} ` },
+            { name: PERSON },
+            null,
+          ],
+        })
+      );
+      const page = await inbox.listItems(
+        channel,
+        window(),
+        new InboxUsageMeter()
+      );
+      expect(page.items[0].mentions).toEqual([PERSON]);
+    });
+
+    it('carries mentions in the demo list (listComments), comment and reply', async () => {
+      respond((url) =>
+        url.pathname.endsWith('/published_posts')
+          ? json({ data: [{ id: POST }] })
+          : json({
+              data: [
+                {
+                  id: COMMENT,
+                  message_tags: [tags[0]],
+                  comments: { data: [{ id: REPLY, message_tags: [tags[1]] }] },
+                },
+              ],
+            })
+      );
+      const posts = await inbox.listComments(channel);
+      expect(posts[0].comments[0].mentions).toEqual([PERSON]);
+      expect(posts[0].comments[0].replies[0].mentions).toEqual([SIDE]);
+      expect(JSON.stringify(posts)).not.toContain('600000000000001');
+    });
+
+    describe('the tagged part of the text (taggedText)', () => {
+      const FULL = 'Max Muster';
+      const mentionsOf = async (comment: Record<string, unknown>) => {
+        respond(feedWith({ id: COMMENT, ...comment }));
+        const page = await inbox.listItems(
+          channel,
+          window(),
+          new InboxUsageMeter()
+        );
+        return page.items[0].mentions;
+      };
+      const tag = (extra: Record<string, unknown>) => ({
+        id: '600000000000003',
+        name: FULL,
+        type: 'user',
+        ...extra,
+      });
+
+      it('gives a tag shortened to the first name as name and part', async () => {
+        expect(
+          await mentionsOf({
+            message: 'Danke Max, super!',
+            message_tags: [tag({ offset: 6, length: 3 })],
+          })
+        ).toEqual([FULL, 'Max']);
+      });
+
+      it('lists a part equal to the name once', async () => {
+        expect(
+          await mentionsOf({
+            message: 'Danke Max Muster!',
+            message_tags: [tag({ offset: 6, length: 10 })],
+          })
+        ).toEqual([FULL]);
+      });
+
+      it('counts the offset in UTF-16 units after an emoji', async () => {
+        const message = '😀 Danke Max!';
+        expect(message.indexOf('Max')).toBe(9);
+        expect(
+          await mentionsOf({
+            message,
+            message_tags: [tag({ offset: 9, length: 3 })],
+          })
+        ).toEqual([FULL, 'Max']);
+      });
+
+      it('drops a part that splits a surrogate pair, keeps the name', async () => {
+        for (const [offset, length] of [
+          [1, 3], // starts on a low surrogate
+          [0, 1], // ends on a high surrogate
+        ]) {
+          expect(
+            await mentionsOf({
+              message: '😀 Danke Max!',
+              message_tags: [tag({ offset, length })],
+            })
+          ).toEqual([FULL]);
+        }
+      });
+
+      it('keeps a part that is a whole emoji pair', async () => {
+        expect(
+          await mentionsOf({
+            message: '😀 Danke Max!',
+            message_tags: [tag({ offset: 0, length: 2 })],
+          })
+        ).toEqual([FULL, '😀']);
+      });
+
+      it('drops a part outside the text, negative, empty or not an integer', async () => {
+        const message = 'Danke Max!';
+        const cases: [unknown, unknown][] = [
+          [6, 50],
+          [6, 5],
+          [10, 1],
+          [11, 1],
+          [-1, 3],
+          [6, 0],
+          [6, -3],
+          [6.5, 3],
+          [6, 1.5],
+          ['6', 3],
+          [6, '3'],
+          [NaN, 3],
+          [6, NaN],
+          [Infinity, 3],
+          [6, Infinity],
+          [null, 3],
+          [6, undefined],
+          [true, 1],
+        ];
+        for (const [offset, length] of cases) {
+          expect(
+            await mentionsOf({
+              message,
+              message_tags: [tag({ offset, length })],
+            })
+          ).toEqual([FULL]);
+        }
+      });
+
+      it('drops the part of a comment without a message', async () => {
+        expect(
+          await mentionsOf({ message_tags: [tag({ offset: 0, length: 3 })] })
+        ).toEqual([FULL]);
+        expect(
+          await mentionsOf({
+            message: 7,
+            message_tags: [tag({ offset: 0, length: 1 })],
+          })
+        ).toEqual([FULL]);
+      });
+
+      it('keeps only the part of a tag without a name', async () => {
+        expect(
+          await mentionsOf({
+            message: 'Danke Max!',
+            message_tags: [{ id: '1', offset: 6, length: 3 }],
+          })
+        ).toEqual(['Max']);
+      });
+
+      it('orders name 1, part 1, name 2, part 2', async () => {
+        expect(
+          await mentionsOf({
+            message: 'Max und Lena sind da',
+            message_tags: [
+              tag({ offset: 0, length: 3 }),
+              tag({ name: 'Lena Beispiel', offset: 8, length: 4 }),
+            ],
+          })
+        ).toEqual([FULL, 'Max', 'Lena Beispiel', 'Lena']);
+      });
+
+      it('trims the part and drops one of only spaces', async () => {
+        expect(
+          await mentionsOf({
+            message: 'Danke  Max !',
+            message_tags: [
+              tag({ offset: 5, length: 6 }),
+              tag({ name: 'Lena Beispiel', offset: 5, length: 2 }),
+            ],
+          })
+        ).toEqual([FULL, 'Max', 'Lena Beispiel']);
+      });
+
+      it('cuts the part to 300 characters', async () => {
+        const message = 'a'.repeat(400);
+        const [, part] = await mentionsOf({
+          message,
+          message_tags: [tag({ offset: 0, length: 400 })],
+        });
+        expect(part).toBe('a'.repeat(300));
+      });
+
+      it('counts names and parts together towards the limit of 50', async () => {
+        const message = Array.from({ length: 40 }, (_, i) => `W${i}`).join(' ');
+        const message_tags = Array.from({ length: 40 }, (_, i) => {
+          const offset = message.indexOf(`W${i}`);
+          return tag({
+            name: `Name ${i} voll`,
+            offset,
+            length: `W${i}`.length,
+          });
+        });
+        const mentions = await mentionsOf({ message, message_tags });
+        expect(mentions).toHaveLength(50);
+        expect(mentions.slice(0, 4)).toEqual([
+          'Name 0 voll',
+          'W0',
+          'Name 1 voll',
+          'W1',
+        ]);
+        expect(mentions[49]).toBe('W24');
+      });
+
+      it('takes the own text for the part in replies', async () => {
+        respond(
+          feedWith({
+            id: COMMENT,
+            message: 'Hallo Max',
+            message_tags: [tag({ offset: 6, length: 3 })],
+            comments: {
+              data: [
+                {
+                  id: REPLY,
+                  message: 'Nein, Lena!',
+                  message_tags: [
+                    tag({ name: 'Lena Beispiel', offset: 6, length: 4 }),
+                  ],
+                },
+              ],
+            },
+          })
+        );
+        const page = await inbox.listItems(
+          channel,
+          window(),
+          new InboxUsageMeter()
+        );
+        expect(page.items.map((item) => [item.id, item.mentions])).toEqual([
+          [COMMENT, [FULL, 'Max']],
+          [REPLY, ['Lena Beispiel', 'Lena']],
+        ]);
+      });
+
+      it('takes the own text in the demo list too', async () => {
+        respond((url) =>
+          url.pathname.endsWith('/published_posts')
+            ? json({ data: [{ id: POST }] })
+            : json({
+                data: [
+                  {
+                    id: COMMENT,
+                    message: 'Hallo Max',
+                    message_tags: [tag({ offset: 6, length: 3 })],
+                    comments: {
+                      data: [
+                        {
+                          id: REPLY,
+                          message: 'Ja Lena',
+                          message_tags: [
+                            tag({
+                              name: 'Lena Beispiel',
+                              offset: 3,
+                              length: 4,
+                            }),
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                ],
+              })
+        );
+        const posts = await inbox.listComments(channel);
+        expect(posts[0].comments[0].mentions).toEqual([FULL, 'Max']);
+        expect(posts[0].comments[0].replies[0].mentions).toEqual([
+          'Lena Beispiel',
+          'Lena',
+        ]);
+      });
+    });
+
+    describe('message_tags in the fields of every read of comments', () => {
+      const fieldsOf = () =>
+        fetchMock.mock.calls.map(([url]) => ({
+          path: new URL(url as string).pathname,
+          fields: new URL(url as string).searchParams.get('fields') ?? '',
+        }));
+
+      it('window (items): comments and replies embedded', async () => {
+        respond(() => json({ data: [] }));
+        await inbox.listItems(channel, window(), new InboxUsageMeter());
+        const fields = fieldsOf()[0].fields;
+        expect(fields).toContain(
+          `comments.limit(50){${FIELDS},comments.limit(25){${FIELDS}}}`
+        );
+      });
+
+      it('demo list: the thread of the comments of a post', async () => {
+        respond((url) =>
+          url.pathname.endsWith('/published_posts')
+            ? json({ data: [{ id: POST }] })
+            : json({ data: [] })
+        );
+        await inbox.listComments(channel);
+        expect(fieldsOf()[1].fields).toBe(
+          `${FIELDS},comments.limit(25){${FIELDS}}`
+        );
+      });
+
+      it('thread of a comment (getConversation with postId)', async () => {
+        respond((url) => {
+          const path = url.pathname.replace(`/${META_GRAPH_API_VERSION}`, '');
+          if (path === `/${POST}`) {
+            return json({ id: POST, created_time: day(1), from: { id: PAGE } });
+          }
+          if (path === `/${POST}/comments`) {
+            return json({ data: [{ id: COMMENT }] });
+          }
+          return json({ id: COMMENT, comments: { data: [{ id: REPLY }] } });
+        });
+        await inbox.getConversation(
+          channel,
+          COMMENT,
+          new InboxUsageMeter(),
+          POST
+        );
+        const read = fieldsOf().find((c) => c.path.endsWith(`/${COMMENT}`));
+        expect(read?.fields).toBe(
+          `${FIELDS},comments.limit(25){${FIELDS}},parent{id}`
+        );
+      });
+
+      it('a single comment that is in none of the pages of its thread', async () => {
+        respond((url) => {
+          const path = url.pathname.replace(`/${META_GRAPH_API_VERSION}`, '');
+          if (path === `/${POST}`) {
+            return json({ id: POST, created_time: day(1), from: { id: PAGE } });
+          }
+          if (path === `/${POST}/comments`) {
+            return json({
+              data: [{ id: COMMENT }, { id: REPLY, parent: { id: COMMENT } }],
+            });
+          }
+          if (path === `/${COMMENT}`) {
+            return json({ id: COMMENT, comments: { data: [] } });
+          }
+          return json({ id: REPLY, message_tags: [tags[0]] });
+        });
+        const found = await inbox.getConversation(
+          channel,
+          REPLY,
+          new InboxUsageMeter(),
+          POST
+        );
+        const read = fieldsOf().find((c) => c.path.endsWith(`/${REPLY}`));
+        expect(read?.fields).toBe(FIELDS);
+        expect(
+          found?.items.find((item) => item.id === REPLY)?.mentions
+        ).toEqual([PERSON]);
+      });
+
+      it('replies of a comment with more than one page', async () => {
+        respond((url) => {
+          if (url.pathname.endsWith('/published_posts')) {
+            return json({
+              data: [
+                {
+                  id: POST,
+                  created_time: day(1),
+                  comments: {
+                    data: [
+                      {
+                        id: COMMENT,
+                        comments: { data: [], paging: { next: 'https://x' } },
+                      },
+                    ],
+                  },
+                },
+              ],
+            });
+          }
+          return json({ data: [{ id: REPLY, message_tags: [tags[1]] }] });
+        });
+        const page = await inbox.listItems(
+          channel,
+          window(),
+          new InboxUsageMeter()
+        );
+        expect(fieldsOf()[1].path).toContain(`/${COMMENT}/comments`);
+        expect(fieldsOf()[1].fields).toBe(FIELDS);
+        expect(page.items.find((item) => item.id === REPLY)?.mentions).toEqual([
+          SIDE,
+        ]);
+      });
     });
   });
 

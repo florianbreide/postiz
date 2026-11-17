@@ -70,6 +70,13 @@ const COMMENT_TEXT = 'Erfundener Kommentar';
 const COMMENTER = 'erfundene_person';
 const REPLY_TEXT = 'Erfundene Antwort';
 const META_MESSAGE = 'Erfundene Meldung von Meta, nie im Log';
+// Names tagged in a comment (W76): never in a log line.
+const MENTION_PERSON = 'Erika Beispiel';
+const MENTION_PAGE = 'Beispiel Werkstatt';
+// A part of a text that a tag covers, unique so a log line cannot hold it by
+// chance.
+const MENTION_PART = 'Zeppelinwiese';
+const MENTION_PART_TEXT = `Danke ${MENTION_PART}, super!`;
 
 const rows: Record<string, any> = {
   [DEMO]: {
@@ -438,6 +445,9 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
       COMMENTER,
       REPLY_TEXT,
       META_MESSAGE,
+      MENTION_PERSON,
+      MENTION_PAGE,
+      MENTION_PART,
       pageToken,
       userToken,
       serviceToken,
@@ -2015,6 +2025,156 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
           ).status
         ).toBe(401);
       });
+    });
+  });
+
+  describe('mentions (W76)', () => {
+    // Facebook as the platform sends it, with message_tags on the comment
+    // and on its reply, including ids, types and positions.
+    const tags = (names: string[]) =>
+      names.map((name, i) => ({
+        id: `60000000000000${i}`,
+        name,
+        type: i === 0 ? 'user' : 'page',
+        offset: i * 10,
+        length: name.length,
+      }));
+    const tagged =
+      (byId: Record<string, unknown[]>) =>
+      async (call: GraphCall): Promise<Response> => {
+        const res = facebookGraph(call);
+        const walk = (value: any): any => {
+          if (Array.isArray(value)) {
+            return value.map(walk);
+          }
+          if (value && typeof value === 'object') {
+            const out: any = {};
+            for (const [key, inner] of Object.entries(value)) {
+              out[key] = walk(inner);
+            }
+            if (typeof value.id === 'string' && byId[value.id]) {
+              out.message_tags = byId[value.id];
+            }
+            return out;
+          }
+          return value;
+        };
+        return json(walk(await res.json()), res.status);
+      };
+    const TAGS = {
+      [FB_COMMENT]: tags([MENTION_PERSON, MENTION_PAGE]),
+      [FB_REPLY]: tags([MENTION_PAGE]),
+    };
+
+    it.each([
+      ['items', () => items(FB_CHANNEL)],
+      ['comments/:commentId', () => comment(FB_CHANNEL, FB_COMMENT)],
+    ])('%s answers mentions as an array of names, no ids', async (_, read) => {
+      graphHandler = tagged(TAGS);
+      const res = await read();
+      expect(res.status).toBe(200);
+      const body = res.json();
+      expect(body.items.map((item: any) => [item.id, item.mentions])).toEqual([
+        // The first tag also covers the first 14 characters of the text of
+        // the comment, the others reach past the end of their text.
+        [FB_COMMENT, [MENTION_PERSON, 'Erfundener Kom', MENTION_PAGE]],
+        [FB_REPLY, [MENTION_PAGE]],
+      ]);
+      for (const item of body.items) {
+        expect(
+          item.mentions.every((name: unknown) => typeof name === 'string')
+        ).toBe(true);
+      }
+      // No id, type or position of a tag leaves.
+      expect(res.text).not.toContain('60000000000000');
+      expect(res.text).not.toContain('message_tags');
+      expect(res.text).not.toContain('"offset"');
+      // The names are in no log line (the check after each test too).
+      expect(logLines.join('\n')).not.toContain(MENTION_PERSON);
+      expect(logLines.join('\n')).not.toContain(MENTION_PAGE);
+      expect(logLines).toHaveLength(1);
+      expect(writes()).toEqual([]);
+    });
+
+    it.each([
+      ['items', () => items(FB_CHANNEL)],
+      ['comments/:commentId', () => comment(FB_CHANNEL, FB_COMMENT)],
+    ])(
+      '%s answers the tagged part of the text, in no log line',
+      async (_, read) => {
+        const handler = tagged({
+          [FB_COMMENT]: [
+            {
+              id: '600000000000009',
+              name: MENTION_PERSON,
+              type: 'user',
+              offset: 6,
+              length: MENTION_PART.length,
+            },
+          ],
+        });
+        graphHandler = async (call) => {
+          const res = await handler(call);
+          const walk = (value: any): any => {
+            if (Array.isArray(value)) {
+              return value.map(walk);
+            }
+            if (value && typeof value === 'object') {
+              const out: any = {};
+              for (const [key, inner] of Object.entries(value)) {
+                out[key] = walk(inner);
+              }
+              if (value.id === FB_COMMENT) {
+                out.message = MENTION_PART_TEXT;
+              }
+              return out;
+            }
+            return value;
+          };
+          return json(walk(await res.json()), res.status);
+        };
+        const res = await read();
+        expect(res.status).toBe(200);
+        const body = res.json();
+        expect(
+          body.items.find((item: any) => item.id === FB_COMMENT).mentions
+        ).toEqual([MENTION_PERSON, MENTION_PART]);
+        expect(res.text).not.toContain('600000000000009');
+        expect(res.text).not.toContain('"offset"');
+        // Neither the name nor the part in a log line (the check after each
+        // test too).
+        expect(logLines.join('\n')).not.toContain(MENTION_PERSON);
+        expect(logLines.join('\n')).not.toContain(MENTION_PART);
+        expect(writes()).toEqual([]);
+      }
+    );
+
+    it('answers mentions [] when the platform sends no tags', async () => {
+      graphHandler = facebookGraph;
+      for (const res of [
+        await items(FB_CHANNEL),
+        await comment(FB_CHANNEL, FB_COMMENT),
+      ]) {
+        expect(res.status).toBe(200);
+        expect(res.json().items.map((item: any) => item.mentions)).toEqual([
+          [],
+          [],
+        ]);
+      }
+    });
+
+    it('answers mentions [] for every Instagram entry, tags or not', async () => {
+      graphHandler = instagramGraph;
+      for (const res of [
+        await items(IG_CHANNEL),
+        await comment(IG_CHANNEL, IG_COMMENT),
+      ]) {
+        expect(res.status).toBe(200);
+        expect(res.json().items.map((item: any) => item.mentions)).toEqual([
+          [],
+          [],
+        ]);
+      }
     });
   });
 

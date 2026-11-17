@@ -150,6 +150,7 @@ describe('InstagramInbox', () => {
               likeCount: 4,
               hidden: true,
               fromOwner: false,
+              mentions: [],
               replies: [
                 {
                   id: REPLY,
@@ -159,6 +160,7 @@ describe('InstagramInbox', () => {
                   likeCount: 1,
                   hidden: false,
                   fromOwner: false,
+                  mentions: [],
                 },
               ],
             },
@@ -170,6 +172,7 @@ describe('InstagramInbox', () => {
               likeCount: 0,
               hidden: false,
               fromOwner: false,
+              mentions: [],
               replies: [],
             },
           ],
@@ -467,6 +470,7 @@ describe('InstagramInbox', () => {
           likeCount: 2,
           hidden: false,
           fromOwner: false,
+          mentions: [],
         },
         expect.objectContaining({
           id: REPLY,
@@ -869,6 +873,71 @@ describe('InstagramInbox', () => {
       const usage = new InboxUsageMeter();
       await inbox.getConversation(channel, COMMENT, usage);
       expect(usage.usage).toEqual({ percent: 35, regainMinutes: 0 });
+    });
+  });
+
+  describe('mentions (W76)', () => {
+    const day = (offset: number) =>
+      new Date(NOW - offset * 86_400_000).toISOString();
+    const window = (): InboxWindow => ({
+      since: null,
+      postsFrom: new Date(NOW - 30 * 86_400_000),
+      postsBefore: null,
+      cursor: null,
+    });
+    // Whatever similar the platform may send: never read.
+    const similar = {
+      mentioned_instagram_users: [
+        { id: '17841000000000777', username: 'erika_beispiel' },
+      ],
+      mentions: ['Erika Beispiel'],
+      message_tags: [{ id: '1', name: 'Erika Beispiel' }],
+    };
+    const platform = (url: URL) =>
+      url.pathname.endsWith(`/${IG}/media`)
+        ? json({ data: [{ id: MEDIA, timestamp: day(1), comments_count: 2 }] })
+        : json({
+            data: [
+              {
+                id: COMMENT,
+                text: 'Erfundener Text @erika_beispiel',
+                ...similar,
+                replies: { data: [{ id: REPLY, ...similar }] },
+              },
+            ],
+          });
+
+    it('is [] on every entry of items, also when the platform sends something similar', async () => {
+      respond(platform);
+      const page = await inbox.listItems(
+        channel,
+        window(),
+        new InboxUsageMeter()
+      );
+      expect(page.items.map((item) => [item.id, item.mentions])).toEqual([
+        [COMMENT, []],
+        [REPLY, []],
+      ]);
+      expect(JSON.stringify(page)).not.toContain('Erika Beispiel');
+      expect(JSON.stringify(page)).not.toContain('17841000000000777');
+    });
+
+    it('is [] in the demo list (listComments), comment and reply', async () => {
+      respond(platform);
+      const posts = await inbox.listComments(channel);
+      expect(posts[0].comments[0].mentions).toEqual([]);
+      expect(posts[0].comments[0].replies[0].mentions).toEqual([]);
+    });
+
+    it('does not ask the platform for mentions in any field list', async () => {
+      respond(platform);
+      await inbox.listItems(channel, window(), new InboxUsageMeter());
+      await inbox.listComments(channel);
+      for (const [url] of fetchMock.mock.calls) {
+        expect(
+          new URL(url as string).searchParams.get('fields') ?? ''
+        ).not.toMatch(/mention|tag/i);
+      }
     });
   });
 
