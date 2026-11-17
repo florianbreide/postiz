@@ -332,9 +332,9 @@ export class YsocialInboxService {
   // Platform errors become 502 platform_error (with the codes and the
   // sanitized message of the platform) or 503 platform_unavailable. The log
   // gets the codes only. Without a clear answer to the write itself
-  // (network error, timeout, a 5xx of Meta) the outcome is unknown: Meta may
-  // have done it. Then 503 outcome_unknown, and the hub reloads the comments
-  // instead of repeating the call.
+  // (network error, timeout, a 5xx of Meta, a 2xx without a readable body)
+  // the outcome is unknown: Meta may have done it. Then 503 outcome_unknown,
+  // and the hub reloads the comments instead of repeating the call.
   private async platform<T>(
     log: Log,
     call: () => Promise<T>,
@@ -346,13 +346,17 @@ export class YsocialInboxService {
       if (!(err instanceof InboxPlatformError)) {
         throw err;
       }
-      const { unavailable, status, code, subcode, reason } = err.details;
-      if (writing && (unavailable || (status ?? 0) >= 500)) {
+      const { unavailable, unreadable, status, code, subcode, reason } =
+        err.details;
+      const body = unreadable ? ' body=unreadable' : '';
+      if (writing && (unavailable || unreadable || (status ?? 0) >= 500)) {
         log(
           `rejected code=outcome_unknown${
             unavailable
               ? ''
-              : ` status=${status} platform=${code ?? '-'}/${subcode ?? '-'}`
+              : ` status=${status} platform=${code ?? '-'}/${
+                  subcode ?? '-'
+                }${body}`
           }`
         );
         throw rejection({ status: 503, code: 'outcome_unknown' });
@@ -364,7 +368,7 @@ export class YsocialInboxService {
       log(
         `rejected code=platform_error status=${status ?? '-'} platform=${
           code ?? '-'
-        }/${subcode ?? '-'}`
+        }/${subcode ?? '-'}${body}`
       );
       throw rejection({
         status: 502,

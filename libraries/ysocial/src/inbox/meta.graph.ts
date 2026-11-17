@@ -51,7 +51,13 @@ export const metaGraph = async (
     throw new InboxPlatformError({ unavailable: true });
   }
 
-  const body: GraphObject | undefined = await res.json().catch(() => undefined);
+  // Only a JSON object counts as an answer. An empty body (204), HTML, a
+  // body cut off by the timeout or a bare value like true is not readable.
+  const parsed: unknown = await res.json().catch(() => undefined);
+  const body =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as GraphObject)
+      : undefined;
   if (!res.ok || body?.error) {
     const error = body?.error || {};
     throw new InboxPlatformError({
@@ -68,7 +74,18 @@ export const metaGraph = async (
           : undefined,
     });
   }
-  return body || {};
+  if (!body) {
+    // 2xx without a readable answer: Meta took the call, but nobody can
+    // tell what it did. A write may have happened (the service turns this
+    // into outcome_unknown), a read has nothing to show.
+    throw new InboxPlatformError({
+      unavailable: false,
+      unreadable: true,
+      status: res.status,
+      reason: 'Die Plattform hat keine lesbare Antwort geschickt.',
+    });
+  }
+  return body;
 };
 
 // Hide, unhide, delete and the webhook subscription answer

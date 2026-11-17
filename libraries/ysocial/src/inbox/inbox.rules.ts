@@ -108,11 +108,13 @@ export interface YsocialInboxProvider {
  * The platform refused a call or could not be reached. Only codes and a
  * sanitized reason, never the token, the URL or a comment text.
  * message carries the codes only, so a log of err.message stays clean.
+ * unreadable: a 2xx without a JSON object as body (meta.graph.ts).
  */
 export class InboxPlatformError extends Error {
   constructor(
     readonly details: {
       unavailable: boolean;
+      unreadable?: boolean;
       status?: number;
       code?: number;
       subcode?: number;
@@ -124,7 +126,7 @@ export class InboxPlatformError extends Error {
         ? 'platform unavailable'
         : `platform error status=${details.status ?? '-'} code=${
             details.code ?? '-'
-          }/${details.subcode ?? '-'}`
+          }/${details.subcode ?? '-'}${details.unreadable ? ' unreadable' : ''}`
     );
     this.name = 'InboxPlatformError';
   }
