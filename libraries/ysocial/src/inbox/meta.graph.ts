@@ -52,8 +52,14 @@ export const metaGraph = async (
   }
 
   // Only a JSON object counts as an answer. An empty body (204), HTML, a
-  // body cut off by the timeout or a bare value like true is not readable.
-  const parsed: unknown = await res.json().catch(() => undefined);
+  // body cut off or a bare value like true is not readable. When the 15 s
+  // run out while the body comes in, that is no answer at all, as before
+  // the headers.
+  let timedOut = false;
+  const parsed: unknown = await res.json().catch((err) => {
+    timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    return undefined;
+  });
   const body =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as GraphObject)
@@ -75,9 +81,12 @@ export const metaGraph = async (
     });
   }
   if (!body) {
-    // 2xx without a readable answer: Meta took the call, but nobody can
-    // tell what it did. A write may have happened (the service turns this
-    // into outcome_unknown), a read has nothing to show.
+    if (timedOut) {
+      throw new InboxPlatformError({ unavailable: true });
+    }
+    // 2xx without a readable answer: the status says yes, the body says
+    // nothing. A write may have happened (the service turns this into
+    // outcome_unknown), a read has nothing to show.
     throw new InboxPlatformError({
       unavailable: false,
       unreadable: true,

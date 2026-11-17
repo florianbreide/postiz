@@ -37,7 +37,7 @@ describe('metaGraph', () => {
       ['an empty body with 200', () => answer('')],
       ['a 204', () => answer(null, 204)],
       ['HTML', () => answer('<html><body>Erfunden</body></html>')],
-      ['a body that the timeout cut off', () => answer('{"success": tr')],
+      ['a body cut off mid-way', () => answer('{"success": tr')],
       ['the bare value true', () => answer('true')],
       ['null', () => answer('null')],
       ['a number', () => answer('42')],
@@ -82,6 +82,34 @@ describe('metaGraph', () => {
         ).rejects.toMatchObject({ details: { unreadable: true } });
       }
     );
+  });
+
+  describe('the 15 s run out while the body comes in', () => {
+    const slowBody = (name: string, status = 200) =>
+      ({
+        ok: status < 400,
+        status,
+        json: async () => {
+          throw new DOMException('The operation timed out.', name);
+        },
+      } as unknown as Response);
+
+    it.each(['TimeoutError', 'AbortError'])(
+      'counts a 2xx as no answer at all for %s, like a timeout before the headers',
+      async (name) => {
+        fetchMock.mockResolvedValue(slowBody(name));
+        const err = await failure();
+        expect(err.details).toEqual({ unavailable: true });
+        expect(err.message).toBe('platform unavailable');
+      }
+    );
+
+    it('keeps the status of a 4xx, Meta has already refused', async () => {
+      fetchMock.mockResolvedValue(slowBody('TimeoutError', 400));
+      const err = await failure();
+      expect(err.details).toMatchObject({ unavailable: false, status: 400 });
+      expect(err.details.unreadable).toBeUndefined();
+    });
   });
 
   describe('readable answers', () => {
