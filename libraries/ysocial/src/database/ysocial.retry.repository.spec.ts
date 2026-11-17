@@ -50,11 +50,12 @@ describe('YsocialRetryRepository.getPostForRetry', () => {
     );
   });
 
-  it('selects no field of READ_API_FORBIDDEN_FIELDS, also not in the channel', async () => {
+  // Retry needs no post text or media, unlike the read API since PR 36.
+  it('selects no field of READ_API_FORBIDDEN_FIELDS, also not in the channel, and no post text', async () => {
     const { repository, post } = setup();
     await repository.getPostForRetry('post-1');
     const { select } = post.findUnique.mock.calls[0][0];
-    for (const field of READ_API_FORBIDDEN_FIELDS) {
+    for (const field of [...READ_API_FORBIDDEN_FIELDS, 'content', 'image']) {
       expect(Object.keys(select)).not.toContain(field);
       expect(Object.keys(select.integration.select)).not.toContain(field);
     }

@@ -3,9 +3,9 @@ import { PrismaRepository } from '@gitroom/nestjs-libraries/database/prisma/pris
 
 /**
  * Fixed field lists of the read API for the hub (PLAN 3.3 PR 18). Never
- * token, refreshToken, customInstanceDetails or settings. No post text and
- * no media either: the hub does not need them before PR 23, and adding them
- * is a decision of its own.
+ * token, refreshToken, customInstanceDetails or settings. Post text and
+ * media since PR 36 (E52): the service passes on only path and type of each
+ * medium, see ysocial.read.service.ts.
  */
 export const CUSTOMER_FIELDS = {
   id: true,
@@ -41,6 +41,8 @@ export const POST_FIELDS = {
   parentPostId: true,
   state: true,
   publishDate: true,
+  content: true,
+  image: true,
   releaseURL: true,
   error: true,
   createdAt: true,
@@ -52,8 +54,6 @@ export const READ_API_FORBIDDEN_FIELDS = [
   'refreshToken',
   'customInstanceDetails',
   'settings',
-  'content',
-  'image',
   'additionalSettings',
   'internalId',
 ];
@@ -90,6 +90,23 @@ export class YsocialReadRepository {
       select: POST_FIELDS,
       orderBy: { publishDate: 'asc' },
       take: POSTS_LIMIT,
+    });
+  }
+
+  getPost(id: string) {
+    return this._post.model.post.findFirst({
+      where: { id, deletedAt: null },
+      select: POST_FIELDS,
+    });
+  }
+
+  // A post and its comments share one group per channel
+  // (PostsRepository.createOrUpdatePost). The service puts them in order.
+  getPostGroup(organizationId: string, group: string) {
+    return this._post.model.post.findMany({
+      where: { organizationId, group, deletedAt: null },
+      select: POST_FIELDS,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   }
 }

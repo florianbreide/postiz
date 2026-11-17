@@ -13,12 +13,12 @@ Gemeinsamer Code für die ysocial-Ordner in Backend und Orchestrator.
 - `src/verification/ysocial.post.verification.service.ts`: liest Posts und prüft einen Post über `postAnalytics`. Der Kanal-Token bleibt in dieser Klasse.
 - `src/database/ysocial.post.repository.ts`: lesende Prisma-Abfragen auf `Post` mit fester Feldliste.
 - `src/database/ysocial.integration.repository.ts`: lesende Abfragen auf `Integration` für die Kanal-Prüfung.
-- `src/database/ysocial.read.repository.ts`: Feldlisten und Abfragen der Lese-API für den Hub.
+- `src/database/ysocial.read.repository.ts`: Feldlisten und Abfragen der Lese-API für den Hub, seit PR 36 mit Posttext und Medien (E52).
 - `src/health/channel.health.ts`: Kanal-Prüfung als reine Funktionen: getrennt, wieder verbunden, entfernt, Ablauf des Zugangs.
 - `src/health/channel.auth.rules.ts`: Was die Antwort von `analytics` über den Zugang sagt.
 - `src/health/ysocial.channel.health.service.ts`: stündliche Kanal-Prüfung und `DailyHealth`, Zustand in Redis.
 - `src/health/test.switch.ts`, `src/health/ysocial.test.switch.service.ts`: Testschalter für die Kanal-Prüfung (PR 19). `DailyHealth` schickt 30 Minuten lang einen ungültigen Token, nur bei `YSOCIAL_TEST_ROUTES=true` und nur für Kanäle aus `YSOCIAL_TEST_INTEGRATIONS`. Schlüssel in Redis mit Ablauf.
-- `src/read/ysocial.read.service.ts`, `src/dtos/ysocial.posts.query.dto.ts`: Lese-API für den Hub.
+- `src/read/ysocial.read.service.ts`, `src/dtos/ysocial.posts.query.dto.ts`: Lese-API für den Hub. Gibt von den Medien nur Pfad und Typ weiter und ordnet die Kommentare eines Threads für `GET /ysocial/posts/:id`.
 - `src/retry/retry.rules.ts`: Wann „Erneut versuchen“ darf und wann der Ausgang unklar ist, als reine Funktionen. Tabelle der Fälle in `apps/orchestrator/src/ysocial/README.md`.
 - `src/retry/ysocial.retry.service.ts`, `src/database/ysocial.retry.repository.ts`, `src/dtos/ysocial.retry.dto.ts`: „Erneut versuchen“. Setzt `ERROR` → `QUEUE` und startet den Post-Workflow über `PostsService.startWorkflow` von Postiz. Ruft nie selbst einen Provider auf.
 - `src/inbox/inbox.rules.ts`: Inbox-Demo (PR 26) als reine Funktionen und Typen: Liste `YSOCIAL_DEMO_INTEGRATIONS`, Prüfung der Plattform-IDs, Schnittstelle `YsocialInboxProvider` je Postiz-Provider, `InboxPlatformError` nur mit Codes und bereinigtem Grund.

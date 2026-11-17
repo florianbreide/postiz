@@ -1,0 +1,67 @@
+import {
+  POST_FIELDS,
+  POSTS_LIMIT,
+  READ_API_FORBIDDEN_FIELDS,
+  YsocialReadRepository,
+} from './ysocial.read.repository';
+
+const setup = () => {
+  const post = {
+    findMany: jest.fn().mockResolvedValue([]),
+    findFirst: jest.fn().mockResolvedValue(null),
+  };
+  const repository = new YsocialReadRepository(
+    {} as any,
+    {} as any,
+    { model: { post } } as any
+  );
+  return { repository, post };
+};
+
+describe('YsocialReadRepository posts', () => {
+  it('getPost reads one post by id, never a deleted one, with POST_FIELDS', async () => {
+    const { repository, post } = setup();
+    await repository.getPost('post-1');
+    expect(post.findFirst).toHaveBeenCalledTimes(1);
+    expect(post.findFirst.mock.calls[0][0]).toEqual({
+      where: { id: 'post-1', deletedAt: null },
+      select: POST_FIELDS,
+    });
+  });
+
+  it('getPostGroup is limited to the organization and the group, without deleted posts, oldest first', async () => {
+    const { repository, post } = setup();
+    await repository.getPostGroup('org-1', 'g-1');
+    expect(post.findMany).toHaveBeenCalledTimes(1);
+    const args = post.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({
+      organizationId: 'org-1',
+      group: 'g-1',
+      deletedAt: null,
+    });
+    expect(args.select).toBe(POST_FIELDS);
+    expect(args.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
+  });
+
+  it('getPosts keeps the date range, the deleted filter, the order and the limit', async () => {
+    const { repository, post } = setup();
+    const from = new Date('2026-10-27T00:00:00Z');
+    const to = new Date('2026-10-28T00:00:00Z');
+    await repository.getPosts(from, to);
+    expect(post.findMany.mock.calls[0][0]).toEqual({
+      where: { deletedAt: null, publishDate: { gte: from, lt: to } },
+      select: POST_FIELDS,
+      orderBy: { publishDate: 'asc' },
+      take: POSTS_LIMIT,
+    });
+  });
+
+  it('selects text and media but no field of READ_API_FORBIDDEN_FIELDS', () => {
+    expect(Object.keys(POST_FIELDS)).toEqual(
+      expect.arrayContaining(['content', 'image'])
+    );
+    for (const field of READ_API_FORBIDDEN_FIELDS) {
+      expect(Object.keys(POST_FIELDS)).not.toContain(field);
+    }
+  });
+});
