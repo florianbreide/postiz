@@ -544,7 +544,20 @@ describe('POST /ysocial/posts/:id/retry', () => {
       nothingStarted();
     });
 
-    it('answers interval_reanchor before unclear_outcome', async () => {
+    it('answers interval_reanchor instead of unclear_outcome', async () => {
+      repository.getPostForRetry.mockResolvedValue(
+        repeatPost(3, { error: 'socket hang up' })
+      );
+      const res = await retry();
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        statusCode: 409,
+        code: 'interval_reanchor',
+      });
+      nothingStarted();
+    });
+
+    it('a confirmation does not lift interval_reanchor', async () => {
       repository.getPostForRetry.mockResolvedValue(
         repeatPost(3, { error: 'socket hang up' })
       );

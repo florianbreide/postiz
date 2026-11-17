@@ -405,15 +405,23 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(Object.keys(body[1])).toContain('intervalInDays');
   });
 
+  // Postiz writes intervalInDays on every post of the group
+  // (PostsRepository.createOrUpdatePost), comments carry the post's value.
   it('posts/:id: intervalInDays for the post and its comments', async () => {
-    repository.getPost.mockResolvedValueOnce({ ...postRow, intervalInDays: 7 });
+    const repeat = { intervalInDays: 7 };
+    repository.getPost.mockResolvedValueOnce({ ...postRow, ...repeat });
+    repository.getPostGroup.mockResolvedValueOnce([
+      { ...comment2, ...repeat },
+      { ...postRow, ...repeat },
+      { ...comment1, ...repeat },
+    ]);
     const body = await (await get('/ysocial/posts/post-1')).json();
     expect(body.intervalInDays).toBe(7);
     expect(
       body.comments.map(
         (row: { intervalInDays: unknown }) => row.intervalInDays
       )
-    ).toEqual([null, null]);
+    ).toEqual([7, 7]);
   });
 
   it('no route ever answers with a forbidden field or a secret value', async () => {
