@@ -8,6 +8,8 @@ import { YsocialIntegrationRepository } from '../../../../libraries/ysocial/src/
 import { YsocialChannelHealthService } from '../../../../libraries/ysocial/src/health/ysocial.channel.health.service';
 import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialTokenMigrationService } from '../../../../libraries/ysocial/src/tokens/ysocial.token.migration.service';
+import { YsocialDeletionRepository } from '../../../../libraries/ysocial/src/database/ysocial.deletion.repository';
+import { YsocialChannelDeletionService } from '../../../../libraries/ysocial/src/deletion/ysocial.channel.deletion.service';
 
 // Entry point for all ysocial orchestrator code. Imported once in
 // apps/orchestrator/src/app.module.ts (patch 2, see YSOCIAL-PATCHES.md).
@@ -23,6 +25,8 @@ import { YsocialTokenMigrationService } from '../../../../libraries/ysocial/src/
     YsocialIntegrationRepository,
     YsocialChannelHealthService,
     YsocialTokenMigrationService,
+    YsocialDeletionRepository,
+    YsocialChannelDeletionService,
     YsocialTemporalClient,
     YsocialActivities,
     YsocialWorkerService,

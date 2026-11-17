@@ -1,3 +1,9 @@
+// The deletion service imports the storage factory, which loads ESM-only
+// packages (file-type). The tests never touch the storage.
+jest.mock('@gitroom/nestjs-libraries/upload/upload.factory', () => ({
+  UploadFactory: { createStorage: jest.fn() },
+}));
+
 // The real IntegrationManager loads every provider, some of them ESM-only.
 // The verification service is faked below anyway.
 jest.mock('@gitroom/nestjs-libraries/integrations/integration.manager', () => ({
@@ -167,6 +173,7 @@ describeIt('ysocial worker on a real Temporal server', () => {
     const activities = new YsocialActivities(
       fakeVerification as any,
       temporal,
+      {} as any,
       {} as any,
       {} as any
     );

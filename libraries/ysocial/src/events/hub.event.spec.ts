@@ -2,6 +2,7 @@ import {
   buildEventId,
   createHubEvent,
   deliveryWorkflowId,
+  HUB_EVENT_KINDS,
   HUB_EVENT_REASON_MAX,
   HUB_EVENT_VERSION,
   sanitizeReason,
@@ -14,6 +15,19 @@ const input = {
   occurredAt: new Date('2026-10-19T07:00:00.000Z'),
   reason: 'Ping aus dem ysocial-Worker',
 };
+
+describe('HUB_EVENT_KINDS', () => {
+  it('knows channel.data_deleted for a channel subject', () => {
+    expect(HUB_EVENT_KINDS).toContain('channel.data_deleted');
+    const event = createHubEvent({
+      ...input,
+      kind: 'channel.data_deleted',
+      subject: { type: 'channel', id: 'int-1' },
+      stateKey: '1',
+    });
+    expect(event.id).toBe('channel.data_deleted:int-1:1');
+  });
+});
 
 describe('createHubEvent', () => {
   it('builds the event of E35', () => {

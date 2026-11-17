@@ -1,3 +1,9 @@
+// The deletion service imports the storage factory, which loads ESM-only
+// packages (file-type). The tests never touch the storage.
+jest.mock('@gitroom/nestjs-libraries/upload/upload.factory', () => ({
+  UploadFactory: { createStorage: jest.fn() },
+}));
+
 // The test replaces connect and createWorker. Without this mock the native
 // Temporal core would load and keep the Jest worker from exiting in time.
 jest.mock('@temporalio/worker', () => ({
@@ -50,7 +56,7 @@ class TestWorkerService extends YsocialWorkerService {
 
   constructor() {
     super(
-      new YsocialActivities({} as any, {} as any, {} as any, {} as any),
+      new YsocialActivities({} as any, {} as any, {} as any, {} as any, {} as any),
       undefined as any
     );
     (this as any)._temporal = this.temporal;

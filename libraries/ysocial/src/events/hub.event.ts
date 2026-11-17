@@ -27,6 +27,8 @@ export const HUB_EVENT_KINDS = [
   'channel.auth_invalid',
   'channel.token_expiring',
   'health.daily',
+  // Deletion of disconnected channels (Datenschutz D1)
+  'channel.data_deleted',
 ] as const;
 
 export type HubEventKind = (typeof HUB_EVENT_KINDS)[number];
