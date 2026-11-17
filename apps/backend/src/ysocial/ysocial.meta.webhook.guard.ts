@@ -64,6 +64,13 @@ export class YsocialMetaWebhookGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
+    // Only the verification request goes through the verify token. HEAD is
+    // what Express makes of a GET without body.
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      log('verify', 'rejected code=method');
+      throw new ForbiddenException();
+    }
+
     const result = checkVerifyRequest(
       process.env,
       request.query['hub.mode'],

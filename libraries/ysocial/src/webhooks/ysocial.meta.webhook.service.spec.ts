@@ -255,5 +255,18 @@ describe('YsocialMetaWebhookService', () => {
       await service.events();
       expect(lines).toEqual([]);
     });
+
+    it('answers 503 store_unavailable without Redis and logs the class name only', async () => {
+      store.lrange.mockRejectedValue(
+        new Error(`connect ECONNREFUSED ${SECRET_IN_ERROR}`)
+      );
+      await expect(service.events()).rejects.toMatchObject({
+        status: 503,
+        response: { statusCode: 503, code: 'store_unavailable' },
+      });
+      expect(lines).toEqual([
+        'meta webhook events result=rejected code=store_unavailable error=Error',
+      ]);
+    });
   });
 });

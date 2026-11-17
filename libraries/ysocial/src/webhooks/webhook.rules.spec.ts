@@ -538,13 +538,15 @@ describe('webhookEvents', () => {
     }
   });
 
-  it('keeps events of other known objects', () => {
-    const [event] = webhookEvents(
-      { ...page([feedChange()]), object: 'whatsapp_business_account' },
-      now
-    );
-    expect(event.object).toBe('whatsapp_business_account');
-  });
+  // For user or permissions, entry.id would be the id of a person.
+  it.each(['user', 'permissions', 'whatsapp_business_account'])(
+    'leaves out events of the object %s',
+    (object) => {
+      expect(webhookEvents({ ...page([feedChange()]), object }, now)).toEqual(
+        []
+      );
+    }
+  );
 
   it('returns nothing for entries without changes', () => {
     expect(webhookEvents(page([]), now)).toEqual([]);

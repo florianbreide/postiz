@@ -11,12 +11,14 @@ import { join } from 'path';
 import {
   ExecutionContext,
   INestApplication,
+  RequestMethod,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import {
   CONTROLLER_WATERMARK,
   GUARDS_METADATA,
+  METHOD_METADATA,
   PATH_METADATA,
 } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
@@ -111,15 +113,17 @@ describe('YsocialTokenGuard', () => {
 // every controller class in apps/backend/src/ysocial (any file, any module)
 // and fails if one is not protected at class level. A stricter guard is
 // allowed: add it to ACCEPTED_GUARDS.
-// YsocialMetaWebhookGuard: the receiver of the Meta webhooks (PR B) cannot
-// get the service token from Meta. It checks the verify token (GET) or the
-// signature with the App Secret (POST) instead, fail-closed.
+// One exception from the fork rule, bound to exactly one controller: the
+// receiver of the Meta webhooks (PR B) cannot get the service token from
+// Meta. YsocialMetaWebhookGuard checks the verify token (GET) or the
+// signature with the App Secret (POST) instead, fail-closed. It counts only
+// there, and the receiver keeps exactly these two handlers.
 describe('every ysocial controller', () => {
   type Constructor = new (...args: any[]) => unknown;
-  const ACCEPTED_GUARDS: Constructor[] = [
-    YsocialTokenGuard,
-    YsocialMetaWebhookGuard,
-  ];
+  const ACCEPTED_GUARDS: Constructor[] = [YsocialTokenGuard];
+  const EXCEPTIONS = new Map<Constructor, Constructor>([
+    [YsocialMetaWebhookController, YsocialMetaWebhookGuard],
+  ]);
 
   const sourceFiles = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -140,10 +144,10 @@ describe('every ysocial controller', () => {
     )
   );
 
-  const isAcceptedGuard = (guard: unknown) =>
-    ACCEPTED_GUARDS.some(
-      (accepted) => guard === accepted || guard instanceof accepted
-    );
+  const isAcceptedGuard = (controller: Constructor) => (guard: unknown) =>
+    [...ACCEPTED_GUARDS, EXCEPTIONS.get(controller)]
+      .filter((accepted): accepted is Constructor => !!accepted)
+      .some((accepted) => guard === accepted || guard instanceof accepted);
 
   it('finds the controllers', () => {
     expect(controllers).toContain(YsocialStatusController);
@@ -178,9 +182,40 @@ describe('every ysocial controller', () => {
     ({ controller }) => {
       const guards: unknown[] =
         Reflect.getMetadata(GUARDS_METADATA, controller) ?? [];
-      expect(guards.some(isAcceptedGuard)).toBe(true);
+      expect(guards.some(isAcceptedGuard(controller))).toBe(true);
     }
   );
+
+  it('accepts YsocialMetaWebhookGuard on no other controller', () => {
+    const others = controllers.filter(
+      (controller) => controller !== YsocialMetaWebhookController
+    );
+    expect(others.length).toBeGreaterThan(0);
+    for (const controller of others) {
+      const guards: unknown[] =
+        Reflect.getMetadata(GUARDS_METADATA, controller) ?? [];
+      expect(guards.some(isAcceptedGuard(controller))).toBe(true);
+      expect(guards).not.toContain(YsocialMetaWebhookGuard);
+    }
+  });
+
+  // GET (verification) and POST (event) on the path itself, nothing else.
+  // A further route there would only have the verify token or the
+  // signature in front of it.
+  it('keeps exactly two handlers on the webhook receiver', () => {
+    const prototype = YsocialMetaWebhookController.prototype as any;
+    const handlers = Object.getOwnPropertyNames(prototype)
+      .filter((name) => name !== 'constructor')
+      .map((name) => ({
+        method: Reflect.getMetadata(METHOD_METADATA, prototype[name]),
+        path: Reflect.getMetadata(PATH_METADATA, prototype[name]),
+      }))
+      .filter((handler) => handler.method !== undefined);
+    expect(handlers).toEqual([
+      { method: RequestMethod.GET, path: '/' },
+      { method: RequestMethod.POST, path: '/' },
+    ]);
+  });
 });
 
 describe('GET /ysocial/status', () => {

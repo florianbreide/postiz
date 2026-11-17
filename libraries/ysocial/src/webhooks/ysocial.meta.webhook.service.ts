@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import {
   WEBHOOK_LOG_KEY,
@@ -62,13 +62,24 @@ export class YsocialMetaWebhookService {
     return { received: events.length };
   }
 
-  // Newest first. An entry that is not valid JSON is left out.
+  // Newest first. An entry that is not valid JSON is left out. Without
+  // Redis 503 store_unavailable, as an HttpException outside the Sentry
+  // filter of Postiz.
   async events() {
-    const raw = await this.store.lrange(
-      WEBHOOK_LOG_KEY,
-      -WEBHOOK_LOG_LIMIT,
-      -1
-    );
+    let raw: string[];
+    try {
+      raw = await this.store.lrange(WEBHOOK_LOG_KEY, -WEBHOOK_LOG_LIMIT, -1);
+    } catch (err) {
+      this._logger.log(
+        `meta webhook events result=rejected code=store_unavailable error=${errorName(
+          err
+        )}`
+      );
+      throw new HttpException(
+        { statusCode: 503, code: 'store_unavailable' },
+        503
+      );
+    }
     const events = (raw || []).flatMap((value): WebhookEvent[] => {
       try {
         return [JSON.parse(value)];

@@ -128,6 +128,41 @@ describe('inbox demo and automation (rule 2)', () => {
     }
   });
 
+  // Allowlist instead of a blocklist: a new import in the receiver (Temporal,
+  // an event to the hub, an HTTP client) has to be added here on purpose,
+  // with a review. The demo guard only reads YSOCIAL_DEMO_INTEGRATIONS.
+  it('lets the webhook receiver import only what it needs', () => {
+    const ALLOWED_IMPORTS = [
+      'crypto',
+      'express',
+      '@nestjs/common',
+      '@nestjs/swagger',
+      '@gitroom/nestjs-libraries/redis/redis.service',
+      '../service.token',
+      './webhook.rules',
+      './ysocial.inbox.demo.guard',
+      './ysocial.meta.webhook.guard',
+      '../../../../libraries/ysocial/src/webhooks/webhook.rules',
+      '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service',
+    ];
+    const receiver = [
+      ...sourceFiles(join(YSOCIAL_LIBRARY, 'webhooks')),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.controller.ts'),
+      join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.guard.ts'),
+    ];
+    const imports = receiver.flatMap((file) =>
+      [
+        ...read(file).matchAll(
+          /(?:from|import\(|require\()\s*['"]([^'"]+)['"]/g
+        ),
+      ].map((match) => match[1])
+    );
+    expect(imports.length).toBeGreaterThan(5);
+    expect(imports.filter((name) => !ALLOWED_IMPORTS.includes(name))).toEqual(
+      []
+    );
+  });
+
   // Tripwire: whoever imports the inbox provider or service anywhere in
   // apps/*/src or libraries/*/src (a new workflow, activity, controller or
   // library) has to be added here on purpose, with a review.

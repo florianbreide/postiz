@@ -93,10 +93,13 @@ export const expectSuccess = (result: GraphObject) => {
  *   MODERATE, pages_manage_metadata and pages_show_list. POST answers
  *   {"success": true}, GET the apps on the Page with subscribed_fields.
  *   https://developers.facebook.com/docs/graph-api/reference/page/subscribed_apps
- * - Instagram fields like comments cannot be subscribed through this edge,
- *   only in the App Dashboard. With Facebook Login the app still has to be
- *   on the linked Page: POST to its subscribed_apps edge, "/me" with the
- *   Page token.
+ * - Instagram, Facebook Login: "Send a POST request to the linked Page's
+ *   /subscribed_apps edge", "You can use /me when the token represents the
+ *   linked Facebook Page". The same guide wants "the fields selected in the
+ *   App Dashboard", while the subscribed_apps reference says: "You cannot
+ *   use the subscribed_fields parameter to configure or subscribe to
+ *   Webhooks for Instagram." So the Page field feed for the linked Page is
+ *   an assumption (README, ungeprüft). comments is set in the App Dashboard.
  *   https://developers.facebook.com/documentation/instagram-platform/webhooks/setup
  */
 

@@ -97,6 +97,9 @@ export const WEBHOOK_LOG_KEY = 'ysocial:demo:meta-webhook-events';
 export const WEBHOOK_LOG_LIMIT = 50;
 export const WEBHOOK_LOG_TTL_S = 24 * 60 * 60;
 
+// The objects of the demo. Everything else is left out.
+export const WEBHOOK_OBJECTS = ['page', 'instagram'];
+
 export interface WebhookEvent {
   receivedAt: string;
   // "page" or "instagram"
@@ -152,7 +155,13 @@ const time = (value: unknown) => {
 export const webhookEvents = (payload: unknown, now: Date): WebhookEvent[] => {
   const body = payload as Json;
   const object = name(body?.object);
-  if (!object || !Array.isArray(body?.entry)) {
+  // Only Page and Instagram. For other objects of the app (user,
+  // permissions …) entry.id would be the id of a person.
+  if (
+    !object ||
+    !WEBHOOK_OBJECTS.includes(object) ||
+    !Array.isArray(body?.entry)
+  ) {
     return [];
   }
   return body.entry.flatMap((entry: Json) =>

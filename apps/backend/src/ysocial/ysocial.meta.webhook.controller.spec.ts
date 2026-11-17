@@ -704,5 +704,46 @@ describe('/ysocial-meta-webhook', () => {
         expect(store.ops).toEqual([]);
       }
     );
+
+    // Express answers HEAD with the GET handler, so it passes the verify
+    // branch of the guard like a GET.
+    it('treats HEAD like the verification request', async () => {
+      const query = new URLSearchParams({
+        'hub.mode': 'subscribe',
+        'hub.verify_token': verifyToken,
+        'hub.challenge': CHALLENGE,
+      });
+      const ok = await fetch(`${baseUrl}/ysocial-meta-webhook?${query}`, {
+        method: 'HEAD',
+      });
+      expect(ok.status).toBe(200);
+      query.set('hub.verify_token', 'falsch');
+      const wrong = await fetch(`${baseUrl}/ysocial-meta-webhook?${query}`, {
+        method: 'HEAD',
+      });
+      expect(wrong.status).toBe(403);
+      expect(store.ops).toEqual([]);
+    });
+  });
+
+  // Express routes these variants to the receiver as well. The exception
+  // from the Basic Auth of the reverse proxy covers only the exact path
+  // (README), so they stay behind it. The guards hold here as well.
+  describe('variants of the path', () => {
+    it.each(['/YSOCIAL-META-WEBHOOK', '/ysocial-meta-webhook/'])(
+      'reaches the guards for %s',
+      async (path) => {
+        const res = await fetch(`${baseUrl}${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-hub-signature-256': `sha256=${'0'.repeat(64)}`,
+          },
+          body: '{}',
+        });
+        expect(res.status).toBe(401);
+        expect(store.ops).toEqual([]);
+      }
+    );
   });
 });
