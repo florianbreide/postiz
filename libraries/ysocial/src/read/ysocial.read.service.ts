@@ -64,8 +64,9 @@ const toPost = (row: PostRow) => ({
 // one before it (parentPostId) and walks them the same way
 // (PostsService.getPostsRecursively).
 const commentsAfter = (id: string, group: PostRow[]) => {
-  // The group comes sorted by createdAt. Should a post ever have two
-  // children, the first one counts, like childrenPost[0] in Postiz.
+  // The group comes sorted by createdAt and id. Should a post ever have two
+  // children, the oldest one counts. Postiz loads childrenPost without an
+  // order, so this is a fixed choice, not a copy of Postiz.
   const byParent = new Map<string | null, PostRow>();
   for (const row of group) {
     if (!byParent.has(row.parentPostId)) {

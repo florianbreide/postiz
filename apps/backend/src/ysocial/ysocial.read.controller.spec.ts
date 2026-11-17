@@ -519,23 +519,28 @@ describe('thread order of the comments', () => {
     return body.comments.map((row) => row.id);
   };
 
+  // The requested post itself sits in the cycle, so the walk would come
+  // back to it without the guard.
   it('ends on a cycle instead of hanging', async () => {
-    const a = comment('post-2', 'post-3', 'a');
-    const b = comment('post-3', 'post-2', 'b');
-    // post-1 -> post-2 -> post-3 -> post-2 ...
+    // post-1 -> post-2 -> post-3 -> post-1 ...
     expect(
-      await thread([postRow, { ...a, parentPostId: 'post-1' }, b])
+      await thread([
+        { ...postRow, parentPostId: 'post-3' },
+        comment('post-2', 'post-1', 'a'),
+        comment('post-3', 'post-2', 'b'),
+      ])
     ).toEqual(['post-2', 'post-3']);
   });
 
-  it('ends when a comment points at the post itself', async () => {
-    expect(
-      await thread([postRow, comment('post-2', 'post-2', 'self')])
-    ).toEqual([]);
+  it('ends when the post points at itself', async () => {
+    expect(await thread([{ ...postRow, parentPostId: 'post-1' }])).toEqual(
+      []
+    );
   });
 
-  // The repository sorts the group by createdAt, like childrenPost[0] in
-  // Postiz the first child counts.
+  // The repository sorts the group by createdAt and id, the oldest child
+  // counts. Postiz loads childrenPost without an order, so this is our
+  // fixed choice for a state that only exists briefly while saving.
   it('follows the first of two comments on the same parent', async () => {
     expect(
       await thread([

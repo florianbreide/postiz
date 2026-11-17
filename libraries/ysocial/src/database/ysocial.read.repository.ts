@@ -106,7 +106,7 @@ export class YsocialReadRepository {
     return this._post.model.post.findMany({
       where: { organizationId, group, deletedAt: null },
       select: POST_FIELDS,
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   }
 }

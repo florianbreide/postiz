@@ -40,7 +40,7 @@ describe('YsocialReadRepository posts', () => {
       deletedAt: null,
     });
     expect(args.select).toBe(POST_FIELDS);
-    expect(args.orderBy).toEqual({ createdAt: 'asc' });
+    expect(args.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
   });
 
   it('getPosts keeps the date range, the deleted filter, the order and the limit', async () => {
