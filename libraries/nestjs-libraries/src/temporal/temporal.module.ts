@@ -26,9 +26,7 @@ export const getTemporalModule = (
     Number(process.env.WORKER_CONCURRENCY_DIVIDER) || 1
   );
 
-  // ysocial patch 6 (YSOCIAL-PATCHES.md): payloads in Temporal are encrypted
-  // once YSOCIAL_TEMPORAL_KEY is set, for the client and every worker.
-  return withYsocialPayloadCodec(TemporalModule.register({
+  const temporalModule = TemporalModule.register({
     isGlobal: true,
     connection: {
       address: process.env.TEMPORAL_ADDRESS || 'localhost:7233',
@@ -100,5 +98,9 @@ export const getTemporalModule = (
           ],
         }
       : {}),
-  }));
+  });
+
+  // ysocial patch 6 (YSOCIAL-PATCHES.md): payloads in Temporal are encrypted
+  // once YSOCIAL_TEMPORAL_KEY is set, for the client and every worker.
+  return withYsocialPayloadCodec(temporalModule);
 };

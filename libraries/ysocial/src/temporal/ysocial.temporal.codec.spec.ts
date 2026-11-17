@@ -9,13 +9,22 @@ jest.mock('@gitroom/nestjs-libraries/integrations/integration.manager', () => ({
   ],
 }));
 
+// Replaces Worker.create only, to see which options nestjs-temporal-core
+// passes on. The rest of the package (NativeConnection etc.) stays real.
+jest.mock('@temporalio/worker', () => ({
+  ...jest.requireActual('@temporalio/worker'),
+  Worker: { create: jest.fn() },
+}));
+
 import { randomBytes } from 'crypto';
 import { DynamicModule, Logger } from '@nestjs/common';
 import { Client } from '@temporalio/client';
+import { Worker } from '@temporalio/worker';
 import {
   TEMPORAL_CLIENT,
   TEMPORAL_MODULE_OPTIONS,
   TemporalModule,
+  TemporalWorkerManagerService,
 } from 'nestjs-temporal-core';
 import { getTemporalModule } from '@gitroom/nestjs-libraries/temporal/temporal.module';
 import { emailQueues } from '@gitroom/nestjs-libraries/temporal/email.queues';
@@ -48,7 +57,10 @@ const realModule = (extra: Record<string, unknown> = {}) =>
     ...extra,
   } as any);
 
-const workerOf = (taskQueue: string, workerOptions?: Record<string, unknown>) => ({
+const workerOf = (
+  taskQueue: string,
+  workerOptions?: Record<string, unknown>
+) => ({
   taskQueue,
   activityClasses: [] as unknown[],
   autoStart: false,
@@ -58,11 +70,9 @@ const workerOf = (taskQueue: string, workerOptions?: Record<string, unknown>) =>
 const spyLogger = () => {
   const lines: string[] = [];
   for (const method of ['log', 'error', 'warn', 'debug', 'verbose'] as const) {
-    jest
-      .spyOn(Logger.prototype, method)
-      .mockImplementation(((message: any) => {
-        lines.push(String(message));
-      }) as any);
+    jest.spyOn(Logger.prototype, method).mockImplementation(((message: any) => {
+      lines.push(String(message));
+    }) as any);
   }
   return lines;
 };
@@ -102,9 +112,9 @@ describe('withYsocialPayloadCodec', () => {
     expect(options.workers[0].workerOptions.maxHeartbeatThrottleInterval).toBe(
       '15s'
     );
-    expect(options.worker.workerOptions.maxConcurrentActivityTaskExecutions).toBe(
-      3
-    );
+    expect(
+      options.worker.workerOptions.maxConcurrentActivityTaskExecutions
+    ).toBe(3);
   });
 
   it('leaves the options alone without key, but replaces the client', () => {
@@ -196,6 +206,51 @@ describe('patch 6 in getTemporalModule', () => {
   });
 });
 
+// Guard for updates of nestjs-temporal-core. The package must pass
+// workerOptions.dataConverter on to Worker.create, and the codec depends on
+// it. The test runs the package service the way the package does (its
+// internals: TemporalWorkerManagerService.createWorkerFromDefinition and the
+// dynamic require of @temporalio/worker). If it breaks after an update,
+// check that workerOptions still reach Worker.create before adjusting it.
+describe('nestjs-temporal-core passes the data converter to Worker.create', () => {
+  it('hands the codec and the failure converter to the worker', async () => {
+    const create = Worker.create as unknown as jest.Mock;
+    create.mockReset();
+    create.mockResolvedValue({});
+    spyLogger();
+
+    const wrapped = withYsocialPayloadCodec(
+      realModule({
+        workers: [
+          {
+            ...workerOf('main', { maxHeartbeatThrottleInterval: '15s' }),
+            autoStart: true,
+          },
+        ],
+      }),
+      { [YSOCIAL_TEMPORAL_KEY_ENV]: newKeyBase64() }
+    );
+    const service = new (TemporalWorkerManagerService as any)(
+      { getAllActivities: () => ({}) },
+      optionsOf(wrapped),
+      {}
+    );
+    await service.initializeMultipleWorkers();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    const config = create.mock.calls[0][0];
+    expect(config.taskQueue).toBe('main');
+    expect(config.maxHeartbeatThrottleInterval).toBe('15s');
+    expect(config.dataConverter.payloadCodecs).toHaveLength(1);
+    expect(config.dataConverter.payloadCodecs[0]).toBeInstanceOf(
+      YsocialPayloadCodec
+    );
+    expect(config.dataConverter.failureConverterPath).toMatch(
+      /failure\.converter/
+    );
+  });
+});
+
 // Fake connection of the namespace calls.
 const fakeConnection = (opts: {
   data?: Record<string, string> | null;
@@ -224,16 +279,26 @@ describe('replaced TEMPORAL_CLIENT factory', () => {
   ) => {
     const module = realModule();
     providerOf(module, TEMPORAL_CLIENT).useFactory = async () => original;
-    return providerOf(
-      withYsocialPayloadCodec(module, env),
-      TEMPORAL_CLIENT
-    ).useFactory as () => Promise<any>;
+    return providerOf(withYsocialPayloadCodec(module, env), TEMPORAL_CLIENT)
+      .useFactory as () => Promise<any>;
   };
 
-  it('returns null without a check when the original returns null', async () => {
+  it('rejects without a check when the original returns null', async () => {
     const lines = spyLogger();
-    expect(await factoryOf(null, {})()).toBeNull();
-    expect(lines).toEqual([]);
+    const err = await factoryOf(null, {
+      [YSOCIAL_TEMPORAL_KEY_ENV]: newKeyBase64(),
+    })().catch((e) => e);
+    expect(err).toBeInstanceOf(YsocialTemporalKeyError);
+    expect(err.message).toContain('Temporal-Client fehlt');
+    expect(err.message).toContain('ohne die Prüfung startet Postiz nicht');
+    expect(lines).toEqual([`temporal codec check failed: ${err.message}`]);
+  });
+
+  it('rejects a missing client also without a key', async () => {
+    spyLogger();
+    await expect(factoryOf(null, {})()).rejects.toThrow(
+      /Temporal-Client fehlt/
+    );
   });
 
   it('returns a Client with the codec on the same connection and namespace', async () => {
@@ -264,13 +329,14 @@ describe('replaced TEMPORAL_CLIENT factory', () => {
         [YSOCIAL_TEMPORAL_KEY_ENV]: newKeyBase64(),
       })()
     ).rejects.toThrow(/passt nicht/);
-    expect(lines.some((l) => l.startsWith('temporal codec check failed:'))).toBe(
-      true
-    );
+    expect(
+      lines.some((l) => l.startsWith('temporal codec check failed:'))
+    ).toBe(true);
   });
 });
 
 describe('YsocialPayloadCodecCheck', () => {
+  const SECRET_TEXT = 'access_token=EAAB-invented-error-text';
   const MARKER = YSOCIAL_PAYLOAD_CODEC_MARKER;
   const key = keyOf(newKeyBase64());
   const other = keyOf(newKeyBase64());
@@ -371,6 +437,71 @@ describe('YsocialPayloadCodecCheck', () => {
     expect(fake.updateNamespace).not.toHaveBeenCalled();
     expect(err.message).not.toContain(key.key.toString('base64'));
     expect(lines[0]).toMatch(/^temporal codec check failed: /);
+  });
+
+  it.each([
+    [14, 'Temporal nicht erreichbar', 'gRPC-Status 14'],
+    [5, 'gibt es in Temporal nicht', 'gRPC-Status 5'],
+  ])(
+    'names the gRPC status %i of a failed read',
+    async (code, text, status) => {
+      const lines = spyLogger();
+      const describe = jest.fn(async () => {
+        throw Object.assign(new Error(`details ${SECRET_TEXT}`), { code });
+      });
+      const fake = fakeConnection({ describe });
+      const check = new YsocialPayloadCodecCheck(fake.connection, 'ns', 0);
+      const err = await check.run(key).catch((e) => e);
+      expect(err).toBeInstanceOf(YsocialTemporalKeyError);
+      expect(err.message).toContain(text);
+      expect(err.message).toContain(status);
+      expect(err.message).toContain('Namespace ns');
+      expect(describe).toHaveBeenCalledTimes(3);
+      for (const out of [err.message, ...lines]) {
+        expect(out).not.toContain(SECRET_TEXT);
+      }
+      expect(lines).toEqual([`temporal codec check failed: ${err.message}`]);
+    }
+  );
+
+  it('names the error class when the error has no numeric code', async () => {
+    const lines = spyLogger();
+    class BoomError extends Error {
+      name = 'BoomError';
+    }
+    const describe = jest.fn(async () => {
+      throw Object.assign(new BoomError(SECRET_TEXT), { code: 'ECONNREFUSED' });
+    });
+    const fake = fakeConnection({ describe });
+    const err = await new YsocialPayloadCodecCheck(fake.connection, 'ns', 0)
+      .run(key)
+      .catch((e) => e);
+    expect(err.message).toContain('Temporal nicht erreichbar');
+    expect(err.message).toContain('(BoomError)');
+    expect(err.message).not.toContain('gRPC-Status');
+    for (const out of [err.message, ...lines]) {
+      expect(out).not.toContain(SECRET_TEXT);
+    }
+  });
+
+  it('fails when the marker cannot be set, naming the status only', async () => {
+    const lines = spyLogger();
+    const fake = fakeConnection({ data: {} });
+    fake.updateNamespace.mockRejectedValue(
+      Object.assign(new Error(SECRET_TEXT), { code: 7 })
+    );
+    const err = await new YsocialPayloadCodecCheck(fake.connection, 'ns', 0)
+      .run(key)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(YsocialTemporalKeyError);
+    expect(err.message).toContain('Markierung im Namespace ns nicht gesetzt');
+    expect(err.message).toContain('gRPC-Status 7');
+    expect(err.message).toContain('ohne sie startet Postiz nicht');
+    for (const out of [err.message, ...lines]) {
+      expect(out).not.toContain(SECRET_TEXT);
+      expect(out).not.toContain(key.key.toString('base64'));
+    }
+    expect(lines).toEqual([`temporal codec check failed: ${err.message}`]);
   });
 
   it('runs normally when the second retry works', async () => {

@@ -1,4 +1,9 @@
-import { DynamicModule, FactoryProvider, Logger, Provider } from '@nestjs/common';
+import {
+  DynamicModule,
+  FactoryProvider,
+  Logger,
+  Provider,
+} from '@nestjs/common';
 import { Client, Connection } from '@temporalio/client';
 import { DataConverter } from '@temporalio/common';
 import {
@@ -52,6 +57,16 @@ export interface YsocialPayloadCodecState {
 type NamespaceConnection = Pick<Connection, 'workflowService' | 'withDeadline'>;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const GRPC_NOT_FOUND = 5;
+
+// Status code of a failed gRPC call for the message, never its text.
+const grpcStatus = (err: unknown) => {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === 'number'
+    ? `gRPC-Status ${code}`
+    : (err as Error)?.name || 'Fehler';
+};
 
 export const ysocialDataConverter = (
   codec: YsocialPayloadCodec
@@ -110,12 +125,22 @@ export class YsocialPayloadCodecCheck {
 
     if (!on) {
       // UpdateNamespace merges data, other keys and the config stay.
-      await this._connection.withDeadline(Date.now() + CHECK_TIMEOUT_MS, () =>
-        this._connection.workflowService.updateNamespace({
-          namespace: this._namespace,
-          updateInfo: { data: { [YSOCIAL_PAYLOAD_CODEC_MARKER]: key.kid } },
-        })
-      );
+      try {
+        await this._connection.withDeadline(Date.now() + CHECK_TIMEOUT_MS, () =>
+          this._connection.workflowService.updateNamespace({
+            namespace: this._namespace,
+            updateInfo: {
+              data: { [YSOCIAL_PAYLOAD_CODEC_MARKER]: key.kid },
+            },
+          })
+        );
+      } catch (err) {
+        throw new YsocialTemporalKeyError(
+          `Markierung im Namespace ${
+            this._namespace
+          } nicht gesetzt (${grpcStatus(err)}), ohne sie startet Postiz nicht`
+        );
+      }
       return { codec: 'on', kid: key.kid, marked: true };
     }
 
@@ -140,9 +165,17 @@ export class YsocialPayloadCodecCheck {
       } catch (err) {
         if (attempt >= CHECK_ATTEMPTS) {
           throw new YsocialTemporalKeyError(
-            `Temporal nicht erreichbar: Namespace ${this._namespace} nach ${CHECK_ATTEMPTS} Versuchen nicht lesbar (${
-              (err as Error)?.name || 'Fehler'
-            }), ohne die Prüfung startet Postiz nicht`
+            (err as { code?: unknown })?.code === GRPC_NOT_FOUND
+              ? `Namespace ${
+                  this._namespace
+                } gibt es in Temporal nicht (${grpcStatus(
+                  err
+                )}), ohne die Prüfung startet Postiz nicht`
+              : `Temporal nicht erreichbar: Namespace ${
+                  this._namespace
+                } nach ${CHECK_ATTEMPTS} Versuchen nicht lesbar (${grpcStatus(
+                  err
+                )}), ohne die Prüfung startet Postiz nicht`
           );
         }
         await sleep(this._pauseMs);
@@ -192,7 +225,8 @@ export const withYsocialPayloadCodec = (
     throw err;
   }
 
-  const dataConverter = key && ysocialDataConverter(new YsocialPayloadCodec(key));
+  const dataConverter =
+    key && ysocialDataConverter(new YsocialPayloadCodec(key));
   const temporalOptions = options.useValue as TemporalOptions;
   if (dataConverter) {
     for (const worker of [
@@ -212,7 +246,15 @@ export const withYsocialPayloadCodec = (
     useFactory: async (...args: unknown[]) => {
       const original = (await originalFactory(...args)) as Client | null;
       if (!original) {
-        return original;
+        // nestjs-temporal-core returns null after failed attempts. Workers
+        // would still start, without the check and maybe without the codec.
+        const error = new YsocialTemporalKeyError(
+          'Temporal-Client fehlt (nestjs-temporal-core konnte ihn nicht bauen), ohne die Prüfung startet Postiz nicht'
+        );
+        new Logger('ysocial').error(
+          `temporal codec check failed: ${error.message}`
+        );
+        throw error;
       }
       await new YsocialPayloadCodecCheck(
         original.connection as Connection,

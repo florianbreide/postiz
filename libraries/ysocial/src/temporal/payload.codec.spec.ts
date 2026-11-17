@@ -123,8 +123,10 @@ describe('YsocialPayloadCodec', () => {
 });
 
 describe('readYsocialTemporalKey', () => {
-  const read = (value: string | undefined, extra: Record<string, string> = {}) =>
-    readYsocialTemporalKey({ [YSOCIAL_TEMPORAL_KEY_ENV]: value, ...extra });
+  const read = (
+    value: string | undefined,
+    extra: Record<string, string> = {}
+  ) => readYsocialTemporalKey({ [YSOCIAL_TEMPORAL_KEY_ENV]: value, ...extra });
 
   it.each([[undefined], [''], ['   ']])('is undefined for %j', (value) => {
     expect(read(value)).toBeUndefined();
@@ -140,7 +142,10 @@ describe('readYsocialTemporalKey', () => {
   it.each([
     ['wrong length', randomBytes(16).toString('base64')],
     ['not base64', 'not a key!'],
-    ['non-canonical base64', randomBytes(32).toString('base64').slice(0, -2) + 'B='],
+    [
+      'non-canonical base64',
+      randomBytes(32).toString('base64').slice(0, -2) + 'B=',
+    ],
     ['base64url', randomBytes(32).toString('base64url') + 'x'],
   ])('throws "ist ungültig" for %s without the value', (_name, value) => {
     let thrown: Error | undefined;

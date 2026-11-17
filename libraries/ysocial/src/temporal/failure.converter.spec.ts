@@ -5,6 +5,7 @@ import {
   ProtoFailure,
   TemporalFailure,
 } from '@temporalio/common';
+import { temporal } from '@temporalio/proto';
 import { YsocialFailureConverter } from './failure.converter';
 
 const converter = new YsocialFailureConverter();
@@ -94,18 +95,39 @@ describe('YsocialFailureConverter.failureToError', () => {
     expect(err.failure?.cause?.encodedAttributes).toBeFalsy();
   });
 
-  it('gives the same JSON.stringify as DefaultFailureConverter without encryption', () => {
+  // The failures of a real run come over the wire (protobuf), which fixes
+  // the order of the keys. Post.error holds JSON.stringify(err).
+  const overTheWire = (failure: ProtoFailure): ProtoFailure =>
+    temporal.api.failure.v1.Failure.decode(
+      temporal.api.failure.v1.Failure.encode(failure).finish()
+    ) as ProtoFailure;
+
+  const viaBoth = (wire: boolean) => {
     // One error object, so the stack traces are the same on both sides.
     const original = chain();
+    const through = (f: ProtoFailure) => (wire ? overTheWire(f) : f);
     const plainConverter = new DefaultFailureConverter();
-    const viaPlain = plainConverter.failureToError(
-      plainConverter.errorToFailure(original, payloadConverter),
-      payloadConverter
+    return {
+      plain: plainConverter.failureToError(
+        through(plainConverter.errorToFailure(original, payloadConverter)),
+        payloadConverter
+      ),
+      codec: converter.failureToError(
+        through(converter.errorToFailure(original, payloadConverter)),
+        payloadConverter
+      ),
+    };
+  };
+
+  it('gives the same JSON.stringify as DefaultFailureConverter for a failure from the wire', () => {
+    const { plain, codec } = viaBoth(true);
+    expect(JSON.stringify(codec)).toBe(JSON.stringify(plain));
+  });
+
+  it('gives the same JSON content as DefaultFailureConverter in memory', () => {
+    const { plain, codec } = viaBoth(false);
+    expect(JSON.parse(JSON.stringify(codec))).toEqual(
+      JSON.parse(JSON.stringify(plain))
     );
-    const viaCodec = converter.failureToError(
-      converter.errorToFailure(original, payloadConverter),
-      payloadConverter
-    );
-    expect(JSON.stringify(viaCodec)).toBe(JSON.stringify(viaPlain));
   });
 });

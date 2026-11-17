@@ -45,23 +45,35 @@ const encodedFailure = (
   return encoded;
 };
 
+// Keys in the order of a plain failure decoded from the wire (message,
+// source, stackTrace first), so JSON.stringify gives the same string.
 const decodedFailure = (
   failure: ProtoFailure,
   payloadConverter: PayloadConverter
 ): ProtoFailure => {
-  const decoded: ProtoFailure = { ...failure };
+  let decoded: ProtoFailure = { ...failure };
   if (failure.encodedAttributes) {
     const attributes = payloadConverter.fromPayload<{
       message?: unknown;
       stack_trace?: unknown;
     }>(failure.encodedAttributes);
-    if (typeof attributes?.message === 'string') {
-      decoded.message = attributes.message;
-    }
-    if (typeof attributes?.stack_trace === 'string') {
-      decoded.stackTrace = attributes.stack_trace;
-    }
-    delete decoded.encodedAttributes;
+    const {
+      encodedAttributes: _encoded,
+      message,
+      source,
+      stackTrace,
+      ...rest
+    } = failure;
+    decoded = {
+      message:
+        typeof attributes?.message === 'string' ? attributes.message : message,
+      source,
+      stackTrace:
+        typeof attributes?.stack_trace === 'string'
+          ? attributes.stack_trace
+          : stackTrace,
+      ...rest,
+    };
   }
   if (failure.cause) {
     decoded.cause = decodedFailure(failure.cause, payloadConverter);

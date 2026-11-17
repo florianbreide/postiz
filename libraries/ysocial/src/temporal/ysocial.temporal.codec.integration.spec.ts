@@ -223,8 +223,9 @@ describeIt('payload codec on a real Temporal server', () => {
       });
       await waitFor(
         async () =>
-          (await plainClient.workflow.getHandle(workflowId).fetchHistory())
-            .events!.some((e) => !!e.activityTaskCompletedEventAttributes),
+          (
+            await plainClient.workflow.getHandle(workflowId).fetchHistory()
+          ).events!.some((e) => !!e.activityTaskCompletedEventAttributes),
         'first activity'
       );
     });
@@ -247,7 +248,9 @@ describeIt('payload codec on a real Temporal server', () => {
     expect(result).toEqual({ first: token, second: token });
 
     const payloads = await historyPayloads(plainClient, workflowId);
-    const encrypted = payloads.filter((p) => isYsocialEncryptedPayload(p as any));
+    const encrypted = payloads.filter((p) =>
+      isYsocialEncryptedPayload(p as any)
+    );
     // Old: start input, first activity input and result. New: second
     // activity input and result, workflow result. The signal has no args.
     expect(payloads.length - encrypted.length).toBe(3);
@@ -300,12 +303,16 @@ describeIt('payload codec on a real Temporal server', () => {
       return [json, error];
     });
 
-    // What changeState would write to Post.error stays as it was.
-    expect(JSON.parse(encryptedJson)).toEqual(JSON.parse(plainJson));
+    // What changeState would write to Post.error stays as it was, to the
+    // order of the keys.
+    expect(encryptedJson).toBe(plainJson);
     expect(encryptedJson).toContain(`fetch failed: ${failingUrl}`);
 
     // Nothing of the URL, the body or the stack in the history.
-    for (const id of [`codec-fail-enc-${suffix}`, `codec-fail-rethrow-${suffix}`]) {
+    for (const id of [
+      `codec-fail-enc-${suffix}`,
+      `codec-fail-rethrow-${suffix}`,
+    ]) {
       expect((await historyBytes(plainClient, id)).includes(token)).toBe(false);
     }
 
@@ -333,14 +340,14 @@ describeIt('payload codec on a real Temporal server', () => {
       });
       expect(await handle.result()).toEqual({ first: token, second: token });
 
-      expect((await historyBytes(plainClient, workflowId)).includes(token)).toBe(
-        false
-      );
+      expect(
+        (await historyBytes(plainClient, workflowId)).includes(token)
+      ).toBe(false);
       const payloads = await historyPayloads(plainClient, workflowId);
       expect(payloads.length).toBeGreaterThanOrEqual(6);
-      expect(
-        payloads.every((p) => isYsocialEncryptedPayload(p as any))
-      ).toBe(true);
+      expect(payloads.every((p) => isYsocialEncryptedPayload(p as any))).toBe(
+        true
+      );
       expect(await readMarker()).toBe(kidOf(key));
     } finally {
       await app.close();
