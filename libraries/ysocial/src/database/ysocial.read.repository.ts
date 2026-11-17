@@ -41,6 +41,9 @@ export const POST_FIELDS = {
   parentPostId: true,
   state: true,
   publishDate: true,
+  // Repeat interval in days, null for a single post. Tells the hub when
+  // "Erneut versuchen" answers interval_reanchor (PR 37).
+  intervalInDays: true,
   content: true,
   image: true,
   releaseURL: true,

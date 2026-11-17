@@ -178,6 +178,7 @@ describe('read API field lists', () => {
         'parentPostId',
         'state',
         'publishDate',
+        'intervalInDays',
         'content',
         'image',
         'releaseURL',

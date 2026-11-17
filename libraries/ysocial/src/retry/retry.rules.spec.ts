@@ -201,6 +201,8 @@ describe('retryDecision', () => {
     state: 'ERROR',
     deletedAt: null,
     parentPostId: null,
+    publishDate: new Date('2026-10-27T09:00:00.000Z'),
+    intervalInDays: null,
     releaseId: null,
     releaseURL: null,
     error: 'No Post',

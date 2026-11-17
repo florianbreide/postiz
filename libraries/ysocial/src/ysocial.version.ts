@@ -1,2 +1,2 @@
 // Version of the ysocial module. Raise it with every change in a ysocial folder.
-export const YSOCIAL_MODULE_VERSION = '0.8.1';
+export const YSOCIAL_MODULE_VERSION = '0.8.2';
