@@ -24,7 +24,7 @@ Lies zu Beginn: die Root-`CLAUDE.md` von Postiz (sie gilt weiter und bleibt unve
 ## Regeln für diesen Fork
 
 - Eigener Code liegt nur in `apps/backend/src/ysocial/`, `apps/orchestrator/src/ysocial/` und `libraries/ysocial/`.
-- Jede Postiz-Datei, die du anfasst, kommt mit Stelle, Grund und Datum in `YSOCIAL-PATCHES.md`. Höchstens 5 Patches, der Zähler steht dort. Neue Dateien außerhalb der ysocial-Ordner stehen dort in Tabelle 2.
+- Jede Postiz-Datei, die du anfasst, kommt mit Stelle, Grund und Datum in `YSOCIAL-PATCHES.md`. Höchstens 8 Patches (Ausnahme E58 vom 17.11.2026, Übergabe §6 nennt 5), der Zähler steht dort. Neue Dateien außerhalb der ysocial-Ordner stehen dort in Tabelle 2.
 - Keine neuen Tabellen im Postiz-Schema. `prisma db push` läuft bei jedem Start von Postiz. Fremde Tabellen in der Postiz-Datenbank würden gelöscht oder blockieren den Start. Daten des Hubs liegen in der eigenen Datenbank `hub`.
 - `libraries/ysocial/` importierst du mit relativen Pfaden. Ein neuer Alias in `tsconfig.base.json` wäre ein weiterer Patch.
 - Jeder ysocial-Controller bekommt `YsocialTokenGuard` oder einen strengeren Guard. Die globalen Postiz-Guards lassen neue Controller durch, die Auth-Middleware gilt nur für eine feste Liste von Postiz-Controllern. Kein ysocial-Pfad enthält `/auth`, denn der `PoliciesGuard` überspringt solche Pfade. Ein Test in `ysocial.token.guard.spec.ts` prüft den Guard an jedem Controller. Einen strengeren Guard trägst du dort in `ACCEPTED_GUARDS` ein.
