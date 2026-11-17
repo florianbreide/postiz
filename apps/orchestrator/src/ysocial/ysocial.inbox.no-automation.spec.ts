@@ -53,7 +53,9 @@ describe('inbox demo and automation (rule 2)', () => {
     expect(risky.length).toBeGreaterThan(0);
     for (const file of risky) {
       const source = read(file);
-      expect(source).not.toMatch(/\.(reply|hide|remove|subscribeWebhooks)\(/);
+      expect(source).not.toMatch(
+        /\.(reply|hide|remove|like|subscribeWebhooks)\(/
+      );
     }
   });
 
@@ -94,11 +96,13 @@ describe('inbox demo and automation (rule 2)', () => {
     expect(module).not.toMatch(/_?inboxService\./);
   });
 
-  it('calls reply, hide, remove and subscribeWebhooks of the service only in the controller', () => {
+  it('calls reply, hide, remove, like and subscribeWebhooks of the service only in the controller', () => {
     const callers = sourceFiles(join(ROOT, 'apps'))
       .concat(sourceFiles(join(ROOT, 'libraries')))
       .filter((file) =>
-        /inboxService\.(reply|hide|remove|subscribeWebhooks)\(/.test(read(file))
+        /inboxService\.(reply|hide|remove|like|subscribeWebhooks)\(/.test(
+          read(file)
+        )
       )
       .map((file) => rel(file));
     expect(callers).toEqual([
@@ -124,7 +128,9 @@ describe('inbox demo and automation (rule 2)', () => {
       const source = read(file);
       expect(source).not.toMatch(/inbox\/|InboxService|InboxProvider/);
       expect(source).not.toMatch(/metaGraph|graph\.facebook\.com|fetch\(/);
-      expect(source).not.toMatch(/\.(reply|hide|remove|subscribeWebhooks)\(/);
+      expect(source).not.toMatch(
+        /\.(reply|hide|remove|like|subscribeWebhooks)\(/
+      );
     }
   });
 
@@ -176,6 +182,7 @@ describe('inbox demo and automation (rule 2)', () => {
       'apps/backend/src/ysocial/ysocial.module.ts',
       'libraries/ysocial/src/dtos/ysocial.inbox.dto.ts',
       'apps/backend/src/ysocial/ysocial.inbox.demo.guard.ts',
+      'apps/backend/src/ysocial/ysocial.inbox.guard.ts',
     ];
     const IMPORT = /(?:from|import\(|require\()\s*['"]([^'"]+)['"]/g;
     const INBOX_SPECIFIER =

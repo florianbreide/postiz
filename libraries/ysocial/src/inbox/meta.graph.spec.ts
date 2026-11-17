@@ -1,6 +1,15 @@
 import { randomBytes } from 'crypto';
-import { InboxPlatformError } from './inbox.rules';
-import { metaGraph } from './meta.graph';
+import { InboxPlatformError, InboxUsageMeter } from './inbox.rules';
+import {
+  afterCursor,
+  beforePostWindow,
+  hasMore,
+  inPostWindow,
+  isUnknownObject,
+  metaGraph,
+  newSince,
+  timeOf,
+} from './meta.graph';
 
 const accessToken = randomBytes(24).toString('hex');
 const REASON = 'Die Plattform hat keine lesbare Antwort geschickt.';
@@ -215,5 +224,194 @@ describe('metaGraph', () => {
       expect(err.message).not.toContain(accessToken);
       expect(JSON.stringify(err.details)).not.toContain(accessToken);
     });
+  });
+});
+
+describe('metaGraph usage header (PR 73)', () => {
+  const original = global.fetch;
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = original;
+  });
+
+  const withHeader = (
+    value: string | null,
+    body = '{"data": []}',
+    status = 200
+  ) =>
+    new Response(body, {
+      status,
+      headers: value === null ? {} : { 'x-business-use-case-usage': value },
+    });
+
+  it('records the header of an answer into the meter', async () => {
+    fetchMock.mockResolvedValue(
+      withHeader(JSON.stringify({ '1': [{ call_count: 64 }] }))
+    );
+    const usage = new InboxUsageMeter();
+    await metaGraph('GET', accessToken, '123/media', {}, usage);
+    expect(usage.usage).toEqual({ percent: 64, regainMinutes: 0 });
+  });
+
+  it('records the header of an error answer as well', async () => {
+    fetchMock.mockResolvedValue(
+      withHeader(
+        JSON.stringify({ '1': [{ call_count: 100 }] }),
+        '{"error": {"message": "x", "code": 4}}',
+        400
+      )
+    );
+    const usage = new InboxUsageMeter();
+    await expect(
+      metaGraph('GET', accessToken, '123/media', {}, usage)
+    ).rejects.toBeInstanceOf(InboxPlatformError);
+    expect(usage.usage?.percent).toBe(100);
+  });
+
+  it('leaves the meter empty without the header', async () => {
+    fetchMock.mockResolvedValue(withHeader(null));
+    const usage = new InboxUsageMeter();
+    await metaGraph('GET', accessToken, '123/media', {}, usage);
+    expect(usage.usage).toBeNull();
+  });
+
+  it('works without a meter, and with an answer that has no headers at all', async () => {
+    fetchMock.mockResolvedValue(withHeader('{"1": [{"call_count": 5}]}'));
+    await expect(
+      metaGraph('GET', accessToken, '123/media', {})
+    ).resolves.toEqual({ data: [] });
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [] as unknown[] }),
+    });
+    const usage = new InboxUsageMeter();
+    await expect(
+      metaGraph('GET', accessToken, '123/media', {}, usage)
+    ).resolves.toEqual({ data: [] });
+    expect(usage.usage).toBeNull();
+  });
+});
+
+describe('paging helpers (PR 73)', () => {
+  it('hasMore is true only with paging.next', () => {
+    expect(hasMore({ paging: { next: 'https://x' } })).toBe(true);
+    expect(hasMore({ paging: { cursors: { after: 'abc' } } })).toBe(false);
+    expect(hasMore({ data: [] })).toBe(false);
+    expect(hasMore(undefined)).toBe(false);
+    expect(hasMore(null)).toBe(false);
+  });
+
+  it('afterCursor gives the cursor only while there is a next page', () => {
+    expect(
+      afterCursor({
+        paging: { next: 'https://x', cursors: { after: 'QVFI_1=' } },
+      })
+    ).toBe('QVFI_1=');
+    expect(afterCursor({ paging: { cursors: { after: 'QVFI' } } })).toBeNull();
+    expect(afterCursor({ paging: { next: 'https://x' } })).toBeNull();
+    expect(afterCursor(undefined)).toBeNull();
+  });
+
+  it('afterCursor drops a cursor that is not safe for a query', () => {
+    for (const after of ['a/b', 'a&b=1', '', 5, 'x'.repeat(513)]) {
+      expect(
+        afterCursor({ paging: { next: 'https://x', cursors: { after } } })
+      ).toBeNull();
+    }
+  });
+
+  it('timeOf reads ISO strings of Meta and gives NaN otherwise', () => {
+    expect(timeOf('2026-11-02T10:00:00+0000')).toBe(
+      Date.parse('2026-11-02T10:00:00Z')
+    );
+    expect(timeOf(undefined)).toBeNaN();
+    expect(timeOf(5)).toBeNaN();
+    expect(timeOf('gestern')).toBeNaN();
+  });
+
+  it('newSince counts a time at or after since, not before', () => {
+    const since = new Date('2026-11-02T10:00:00Z');
+    expect(newSince('2026-11-02T10:00:00+0000', since)).toBe(true);
+    expect(newSince('2026-11-02T10:00:01+0000', since)).toBe(true);
+    expect(newSince('2026-11-02T09:59:59+0000', since)).toBe(false);
+    expect(newSince('2026-11-01T10:00:00+0000', null)).toBe(true);
+  });
+
+  it('newSince counts a comment without a readable time', () => {
+    const since = new Date('2026-11-02T10:00:00Z');
+    expect(newSince(null, since)).toBe(true);
+    expect(newSince('kaputt', since)).toBe(true);
+  });
+});
+
+describe('window helpers (PR 73)', () => {
+  const from = new Date('2026-10-18T12:00:00Z');
+  const before = new Date('2026-11-10T00:00:00Z');
+
+  it('inPostWindow counts a time at or after postsFrom and before postsBefore', () => {
+    const window = { postsFrom: from, postsBefore: before };
+    expect(inPostWindow('2026-10-18T12:00:00+0000', window)).toBe(true);
+    expect(inPostWindow('2026-11-09T23:59:59+0000', window)).toBe(true);
+    expect(inPostWindow('2026-10-18T11:59:59+0000', window)).toBe(false);
+    expect(inPostWindow('2026-11-10T00:00:00+0000', window)).toBe(false);
+  });
+
+  it('inPostWindow has no bound where the window has none', () => {
+    expect(
+      inPostWindow('2020-01-01T00:00:00+0000', {
+        postsFrom: null,
+        postsBefore: before,
+      })
+    ).toBe(true);
+    expect(
+      inPostWindow('2030-01-01T00:00:00+0000', {
+        postsFrom: from,
+        postsBefore: null,
+      })
+    ).toBe(true);
+  });
+
+  it('inPostWindow counts a post without a readable time', () => {
+    const window = { postsFrom: from, postsBefore: before };
+    expect(inPostWindow(undefined, window)).toBe(true);
+    expect(inPostWindow('kaputt', window)).toBe(true);
+  });
+
+  it('beforePostWindow is true only for a readable time before postsFrom', () => {
+    expect(
+      beforePostWindow('2026-10-18T11:59:59+0000', { postsFrom: from })
+    ).toBe(true);
+    expect(
+      beforePostWindow('2026-10-18T12:00:00+0000', { postsFrom: from })
+    ).toBe(false);
+    expect(
+      beforePostWindow('2020-01-01T00:00:00+0000', { postsFrom: null })
+    ).toBe(false);
+    expect(beforePostWindow(undefined, { postsFrom: from })).toBe(false);
+  });
+
+  it('isUnknownObject is true only for code 100 with subcode 33', () => {
+    const error = (code?: number, subcode?: number) =>
+      new InboxPlatformError({
+        unavailable: false,
+        status: 400,
+        code,
+        subcode,
+      });
+    expect(isUnknownObject(error(100, 33))).toBe(true);
+    expect(isUnknownObject(error(100, 1))).toBe(false);
+    expect(isUnknownObject(error(190, 33))).toBe(false);
+    expect(isUnknownObject(new Error('x'))).toBe(false);
+    expect(isUnknownObject(new InboxPlatformError({ unavailable: true }))).toBe(
+      false
+    );
   });
 });
