@@ -51,7 +51,19 @@ export const metaGraph = async (
     throw new InboxPlatformError({ unavailable: true });
   }
 
-  const body: GraphObject | undefined = await res.json().catch(() => undefined);
+  // Only a JSON object counts as an answer. An empty body (204), HTML, a
+  // body cut off or a bare value like true is not readable. When the 15 s
+  // run out while the body comes in, that is no answer at all, as before
+  // the headers.
+  let timedOut = false;
+  const parsed: unknown = await res.json().catch((err) => {
+    timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    return undefined;
+  });
+  const body =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as GraphObject)
+      : undefined;
   if (!res.ok || body?.error) {
     const error = body?.error || {};
     throw new InboxPlatformError({
@@ -68,7 +80,21 @@ export const metaGraph = async (
           : undefined,
     });
   }
-  return body || {};
+  if (!body) {
+    if (timedOut) {
+      throw new InboxPlatformError({ unavailable: true });
+    }
+    // 2xx without a readable answer: the status says yes, the body says
+    // nothing. A write may have happened (the service turns this into
+    // outcome_unknown), a read has nothing to show.
+    throw new InboxPlatformError({
+      unavailable: false,
+      unreadable: true,
+      status: res.status,
+      reason: 'Die Plattform hat keine lesbare Antwort geschickt.',
+    });
+  }
+  return body;
 };
 
 // Hide, unhide, delete and the webhook subscription answer

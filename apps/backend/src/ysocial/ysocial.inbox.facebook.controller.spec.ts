@@ -86,6 +86,16 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   });
 
+// A 2xx that is not a JSON object: nothing the platform sent can be read.
+const unreadable = [
+  ['an empty body', () => new Response('', { status: 200 })],
+  ['a 204', () => new Response(null, { status: 204 })],
+  ['HTML', () => new Response('<html>Erfunden</html>', { status: 200 })],
+  ['a cut off body', () => new Response('{"success": tr', { status: 200 })],
+  ['the bare value true', () => new Response('true', { status: 200 })],
+  ['an array', () => new Response('[]', { status: 200 })],
+] as const;
+
 type GraphCall = { method: string; url: URL; body: URLSearchParams | null };
 const graphCalls: GraphCall[] = [];
 let graphHandler: (call: GraphCall) => Response | Promise<Response>;
@@ -724,6 +734,153 @@ describe('/ysocial/inbox with a Facebook Page', () => {
     });
   });
 
+  describe('2xx without a readable body', () => {
+    const isWrite = (call: GraphCall) => call.method !== 'GET';
+    const writeUnreadable = (make: () => Response) => {
+      graphHandler = (call) => (isWrite(call) ? make() : defaultGraph(call));
+    };
+
+    it.each(unreadable)(
+      'answers 503 outcome_unknown on every write route for %s, one write each',
+      async (_name, make) => {
+        writeUnreadable(make);
+        for (const [action, call] of [
+          ['reply', () => reply()],
+          ['hide', () => hide()],
+          ['delete', () => remove()],
+        ] as const) {
+          const res = await call();
+          expect(res.status).toBe(503);
+          expect(res.json()).toEqual({
+            statusCode: 503,
+            code: 'outcome_unknown',
+          });
+          expect(res.text).not.toContain('Erfunden');
+          expect(res.text).not.toContain('platform');
+          expect(logLines).toContain(
+            `inbox ${action} channel=${CHANNEL} comment=${COMMENT} actor=${ACTOR} result=rejected code=outcome_unknown status=${
+              make().status
+            } platform=-/- body=unreadable`
+          );
+        }
+        // One attempt per route, no second try.
+        expect(writes().map((call) => call.method)).toEqual([
+          'POST',
+          'POST',
+          'DELETE',
+        ]);
+      }
+    );
+
+    it('logs body=unreadable once per call, with no token and no text', async () => {
+      writeUnreadable(() => new Response('', { status: 200 }));
+      await reply();
+      expect(logLines).toEqual([
+        `inbox reply channel=${CHANNEL} comment=${COMMENT} actor=${ACTOR} result=rejected code=outcome_unknown status=200 platform=-/- body=unreadable`,
+      ]);
+    });
+
+    it.each(unreadable)(
+      'answers 502 platform_error when reading the comments gets %s',
+      async (_name, make) => {
+        graphHandler = (call) =>
+          call.method === 'GET' &&
+          call.url.pathname.endsWith(`/${POST}/comments`)
+            ? make()
+            : defaultGraph(call);
+        const res = await read();
+        expect(res.status).toBe(502);
+        expect(res.json()).toMatchObject({
+          code: 'platform_error',
+          platformStatus: make().status,
+          reason: 'Die Plattform hat keine lesbare Antwort geschickt.',
+        });
+        expect(logLines).toEqual([
+          `inbox comments channel=${CHANNEL} result=rejected code=platform_error status=${
+            make().status
+          } platform=-/- body=unreadable`,
+        ]);
+      }
+    );
+
+    it('answers 502 platform_error when the list of posts is unreadable', async () => {
+      graphHandler = (call) =>
+        call.url.pathname.endsWith(`/${PAGE}/published_posts`)
+          ? new Response('', { status: 200 })
+          : defaultGraph(call);
+      const res = await read();
+      expect(res.status).toBe(502);
+      expect(res.json()).toMatchObject({ code: 'platform_error' });
+    });
+
+    it.each(unreadable)(
+      'answers 502 and does not write when the check of the comment gets %s',
+      async (_name, make) => {
+        graphHandler = (call) =>
+          call.method === 'GET' &&
+          call.url.pathname.endsWith(`/${PAGE}/published_posts`)
+            ? make()
+            : defaultGraph(call);
+        for (const [action, call] of [
+          ['reply', () => reply()],
+          ['hide', () => hide()],
+          ['delete', () => remove()],
+        ] as const) {
+          const res = await call();
+          expect(res.status).toBe(502);
+          expect(res.json()).toMatchObject({
+            code: 'platform_error',
+            platformStatus: make().status,
+            reason: 'Die Plattform hat keine lesbare Antwort geschickt.',
+          });
+          expect(logLines).toContain(
+            `inbox ${action} channel=${CHANNEL} comment=${COMMENT} actor=${ACTOR} result=rejected code=platform_error status=${
+              make().status
+            } platform=-/- body=unreadable`
+          );
+        }
+        expect(writes()).toEqual([]);
+      }
+    );
+
+    it('keeps 502 platform_error for {"success": false} on every write route', async () => {
+      writeUnreadable(() => json({ success: false }));
+      for (const call of [() => hide(), () => remove()]) {
+        const res = await call();
+        expect(res.status).toBe(502);
+        expect(res.json()).toMatchObject({
+          code: 'platform_error',
+          platformStatus: 200,
+        });
+      }
+      expect(logLines.join('\n')).not.toContain('unreadable');
+      expect(writes()).toHaveLength(2);
+    });
+
+    it('keeps 502 platform_error for a 4xx with an unreadable body on the write', async () => {
+      writeUnreadable(
+        () => new Response('<html>Erfunden</html>', { status: 400 })
+      );
+      for (const call of [() => reply(), () => hide(), () => remove()]) {
+        const res = await call();
+        expect(res.status).toBe(502);
+        expect(res.json()).toMatchObject({
+          code: 'platform_error',
+          platformStatus: 400,
+        });
+      }
+      expect(logLines.join('\n')).not.toContain('unreadable');
+    });
+
+    it('keeps a readable {} on reply as done with replyId null', async () => {
+      graphHandler = (call) =>
+        call.method === 'POST' ? json({}) : defaultGraph(call);
+      const res = await reply();
+      expect(res.status).toBe(201);
+      expect(res.json().replyId).toBeNull();
+    });
+  });
+
   describe('channel of another provider', () => {
     it('answers 409 provider_not_supported for a provider without an inbox', async () => {
       repository.getChannelForInbox.mockResolvedValue(
@@ -1127,6 +1284,66 @@ describe('/ysocial/inbox with a Facebook Page', () => {
         expect(res.status).toBe(200);
         expect(writes()).toHaveLength(1);
         expect(edgeCalls()).toHaveLength(1);
+      });
+    });
+
+    describe('2xx without a readable body', () => {
+      it.each(unreadable)(
+        'answers 503 outcome_unknown when subscribing gets %s, with exactly one attempt',
+        async (_name, make) => {
+          graphHandler = (call) =>
+            call.method === 'POST' ? make() : defaultGraph(call);
+          const res = await subscribe();
+          expect(res.status).toBe(503);
+          expect(res.json()).toEqual({
+            statusCode: 503,
+            code: 'outcome_unknown',
+          });
+          expect(res.text).not.toContain('subscribed');
+          expect(graphCalls).toHaveLength(1);
+          expect(logLines).toEqual([
+            `inbox subscribe channel=${CHANNEL} actor=${ACTOR} result=rejected code=outcome_unknown status=${
+              make().status
+            } platform=-/- body=unreadable`,
+          ]);
+        }
+      );
+
+      it.each(unreadable)(
+        'answers 502 platform_error when the state of the webhooks gets %s',
+        async (_name, make) => {
+          graphHandler = (call) =>
+            call.method === 'GET' && path(call) === `/${EDGE}`
+              ? make()
+              : defaultGraph(call);
+          const res = await getWebhooks();
+          expect(res.status).toBe(502);
+          expect(res.json()).toMatchObject({
+            code: 'platform_error',
+            platformStatus: make().status,
+            reason: 'Die Plattform hat keine lesbare Antwort geschickt.',
+          });
+          expect(res.json()).not.toHaveProperty('subscribed');
+          expect(logLines).toEqual([
+            `inbox webhooks channel=${CHANNEL} result=rejected code=platform_error status=${
+              make().status
+            } platform=-/- body=unreadable`,
+          ]);
+        }
+      );
+
+      it('keeps 502 platform_error for {"success": false} when subscribing', async () => {
+        graphHandler = (call) =>
+          call.method === 'POST'
+            ? json({ success: false })
+            : defaultGraph(call);
+        const res = await subscribe();
+        expect(res.status).toBe(502);
+        expect(res.json()).toMatchObject({
+          code: 'platform_error',
+          platformStatus: 200,
+        });
+        expect(logLines.join('\n')).not.toContain('unreadable');
       });
     });
   });
