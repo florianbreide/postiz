@@ -9,6 +9,8 @@ export const RETRY_POST_FIELDS = {
   state: true,
   deletedAt: true,
   parentPostId: true,
+  publishDate: true,
+  intervalInDays: true,
   releaseId: true,
   releaseURL: true,
   error: true,

@@ -11,6 +11,10 @@ import { PostState } from '../verification/post.verification';
  * - The channel is active like in the missing-posts sweep of Postiz
  *   (posts.repository.ts, searchForMissingThreeHoursPosts): not deleted,
  *   disabled, refreshNeeded or inBetweenSteps.
+ * - No repeat post (intervalInDays) more than 2 hours late. Postiz would
+ *   move it to its next occurrence and wait (reanchorInterval in
+ *   apps/orchestrator/src/activities/post.activity.ts), so the retry would
+ *   not post now (PLAN 3.3 PR 37).
  * - Unclear outcome: Postiz has no field for it. markUnconfirmed in
  *   post.workflow.v1.1.2.ts sets ERROR with the raw error. So the outcome
  *   counts as unclear unless the error proves that nothing went out
@@ -24,6 +28,8 @@ export interface RetryPostRow {
   state: PostState;
   deletedAt: Date | null;
   parentPostId: string | null;
+  publishDate: Date;
+  intervalInDays: number | null;
   releaseId: string | null;
   releaseURL: string | null;
   error: string | null;
@@ -47,7 +53,8 @@ export type RetryRejection =
   | { status: 409; code: 'not_first_post' }
   | { status: 409; code: 'already_queued' }
   | { status: 409; code: 'not_failed'; state: PostState }
-  | { status: 409; code: 'channel_inactive'; flag: ChannelFlag | 'deleted' };
+  | { status: 409; code: 'channel_inactive'; flag: ChannelFlag | 'deleted' }
+  | { status: 409; code: 'interval_reanchor' };
 
 export type RetryDecision =
   | { ok: true; unclear?: UnclearOutcome }
@@ -111,6 +118,10 @@ export const unclearOutcome = (
   return 'unconfirmed';
 };
 
+// REANCHOR_GRACE_MS in post.activity.ts: a repeat post up to 2 hours late
+// still posts at once, a later one waits for its next occurrence.
+export const INTERVAL_REANCHOR_GRACE_MS = 2 * 60 * 60 * 1000;
+
 const reject = (rejection: RetryRejection): RetryDecision => ({
   ok: false,
   rejection,
@@ -120,7 +131,8 @@ const reject = (rejection: RetryRejection): RetryDecision => ({
 // after the check for a running workflow (ysocial.retry.service.ts): nobody
 // should confirm "not online" while Postiz may still be publishing.
 export const retryDecision = (
-  post: RetryPostRow | null | undefined
+  post: RetryPostRow | null | undefined,
+  now = new Date()
 ): RetryDecision => {
   if (!post) {
     return reject({ status: 404, code: 'not_found' });
@@ -143,6 +155,15 @@ export const retryDecision = (
     : channelFlag(post.integration as unknown as ChannelRow);
   if (flag) {
     return reject({ status: 409, code: 'channel_inactive', flag });
+  }
+
+  // Same test as reanchorInterval, which runs when the workflow starts.
+  if (
+    post.intervalInDays &&
+    now.getTime() - new Date(post.publishDate).getTime() >
+      INTERVAL_REANCHOR_GRACE_MS
+  ) {
+    return reject({ status: 409, code: 'interval_reanchor' });
   }
 
   return { ok: true, unclear: unclearOutcome(post) };
