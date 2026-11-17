@@ -51,19 +51,33 @@ describe('LinkedIn page scopes (patch 7)', () => {
     ...overrides,
   });
 
-  /** LinkedIn answers; `granted` is the scope list of the token response. */
-  const mockLinkedin = (granted: string[] = EXPECTED_SCOPES) => {
+  /**
+   * LinkedIn answers; `granted` is the scope list of the token response,
+   * `me` replaces the answer of /v2/me with projection, `encodedScope` sends
+   * the scope space separated and URL encoded.
+   */
+  const mockLinkedin = (
+    granted: string[] = EXPECTED_SCOPES,
+    options: {
+      me?: Partial<Response> & { json?: () => Promise<unknown> };
+      encodedScope?: boolean;
+    } = {}
+  ) => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes('/oauth/v2/accessToken')) {
         return json({
           access_token: accessToken,
           expires_in: 5184000,
           refresh_token: refreshToken,
-          scope: granted.join(','),
+          scope: options.encodedScope
+            ? encodeURIComponent(granted.join(' '))
+            : granted.join(','),
         });
       }
       if (url.includes('/v2/me?projection=')) {
-        return json(meBody());
+        return options.me
+          ? ({ ok: true, status: 200, ...options.me } as unknown as Response)
+          : json(meBody());
       }
       if (url === 'https://api.linkedin.com/v2/me') {
         return json({ id: 'FictionalId01', vanityName: 'erfundene-seite' });
@@ -148,7 +162,7 @@ describe('LinkedIn page scopes (patch 7)', () => {
     it('connects without openid, with id and name from /v2/me', async () => {
       mockLinkedin();
       const result = await new LinkedinPageProvider().authenticate(params());
-      expect(result).not.toBeInstanceOf(String);
+      expect(typeof result).toBe('object');
       expect(result).toMatchObject({
         id: 'linkedin-page_FictionalId01',
         name: 'Erika Mustermann',
@@ -171,6 +185,41 @@ describe('LinkedIn page scopes (patch 7)', () => {
       for (const [, init] of api) {
         expect(init.headers.Authorization).toBe(`Bearer ${accessToken}`);
       }
+    });
+
+    it('connects when the token response lists the scopes URL encoded and space separated', async () => {
+      mockLinkedin(EXPECTED_SCOPES, { encodedScope: true });
+      const result = await new LinkedinPageProvider().authenticate(params());
+      expect(result).toMatchObject({ id: 'linkedin-page_FictionalId01' });
+    });
+
+    describe.each([
+      ['403', { ok: false, status: 403, json: async () => ({}) }],
+      ['429', { ok: false, status: 429, json: async () => ({}) }],
+      ['200 without id', { json: async () => meBody({ id: undefined }) }],
+      ['200 with empty id', { json: async () => meBody({ id: '  ' }) }],
+      [
+        '200 with a body that is no JSON',
+        {
+          json: async () => {
+            throw new SyntaxError('Unexpected token');
+          },
+        },
+      ],
+    ])('when /v2/me answers %s', (_label, me) => {
+      it('refuses and names no token', async () => {
+        mockLinkedin(EXPECTED_SCOPES, { me: me as any });
+        const error = await new LinkedinPageProvider()
+          .authenticate(params())
+          .then(
+            () => undefined,
+            (e: Error) => e
+          );
+        expect(error).toBeInstanceOf(Error);
+        expect(error!.message).toMatch(/^LinkedIn \/v2\/me answered/);
+        expect(error!.message).not.toContain(accessToken);
+        expect(String(error!.stack)).not.toContain(accessToken);
+      });
     });
 
     it.each(EXPECTED_SCOPES.map((scope) => [scope]))(
@@ -201,6 +250,19 @@ describe('LinkedIn page scopes (patch 7)', () => {
         expiresIn: 5184000,
       });
       expect(urls().some((url) => url.includes('/v2/userinfo'))).toBe(false);
+    });
+    it('still returns the tokens when /v2/me answers 429', async () => {
+      mockLinkedin(EXPECTED_SCOPES, {
+        me: { ok: false, status: 429, json: async () => ({}) },
+      });
+      const result = await new LinkedinPageProvider().refreshToken(
+        randomBytes(8).toString('hex')
+      );
+      expect(result).toMatchObject({
+        accessToken,
+        refreshToken: expect.any(String),
+        expiresIn: 5184000,
+      });
     });
   });
 
@@ -237,6 +299,54 @@ describe('LinkedIn page scopes (patch 7)', () => {
       answer(meBody({ profilePicture: { 'displayImage~': { elements: [] } } }));
       const result = await ysocialLinkedinUserinfo(accessToken);
       expect(result).not.toHaveProperty('picture');
+    });
+
+    it('throws with required and a failed answer, naming the status only', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: async () => ({}),
+      });
+      await expect(
+        ysocialLinkedinUserinfo(accessToken, { required: true })
+      ).rejects.toThrow('LinkedIn /v2/me answered 403');
+      const error = await ysocialLinkedinUserinfo(accessToken, {
+        required: true,
+      }).catch((e: Error) => e);
+      expect((error as Error).message).not.toContain(accessToken);
+    });
+
+    it('throws with required and no id', async () => {
+      answer(meBody({ id: undefined }));
+      await expect(
+        ysocialLinkedinUserinfo(accessToken, { required: true })
+      ).rejects.toThrow('LinkedIn /v2/me answered without an id');
+    });
+
+    it('does not throw without required on a failed answer', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({}),
+      });
+      await expect(ysocialLinkedinUserinfo(accessToken)).resolves.toEqual({
+        sub: undefined,
+        name: '',
+      });
+    });
+
+    it('does not throw without required on a body that is no JSON', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token');
+        },
+      });
+      await expect(ysocialLinkedinUserinfo(accessToken)).resolves.toEqual({
+        sub: undefined,
+        name: '',
+      });
     });
 
     it('has no trailing space with only a first name', async () => {

@@ -245,7 +245,7 @@ export class LinkedinPageProvider
       sub: id,
       picture,
       // ysocial patch 7 (YSOCIAL-PATCHES.md): /v2/me instead of /v2/userinfo
-    } = await ysocialLinkedinUserinfo(accessToken);
+    } = await ysocialLinkedinUserinfo(accessToken, { required: true });
 
     const { vanityName } = await (
       await fetch('https://api.linkedin.com/v2/me', {

@@ -17,8 +17,13 @@
  *
  * Postiz asks for every scope in the login dialog and needs every one of
  * them granted, so each line here must be part of the Community Management
- * API product. Channels connected before a change keep their token: they
- * carry a new scope only after they are connected again.
+ * API product (Microsoft Learn, „Increasing Access“, row Community Management
+ * API; checked against the docs, not yet against Y Social's app, B6).
+ *
+ * A change of this list changes what a new login asks for. LinkedIn: „If you
+ * request a different scope than the previously granted scope, all the
+ * previous access tokens are invalidated“ (Authorization Code Flow). Change
+ * it before the first customer page, or plan a new connection of every page.
  *
  * Only "linkedin-page". The provider "linkedin" (personal profiles) keeps
  * openid and profile, it is hidden on our servers (HIDDEN_PROVIDERS).
@@ -51,19 +56,39 @@ const ME_URL =
 
 /**
  * The member behind the token from /v2/me, in the shape of /v2/userinfo.
- * The person id of /v2/me is the sub of OpenID Connect (urn:li:person:<id>).
- * The picture is the largest one LinkedIn lists, if any.
+ *
+ * The id of /v2/me is the person id, unique to the context of the app
+ * (Profile API). That it equals the sub of OpenID Connect is likely (Postiz
+ * posts as urn:li:person:<sub>) but not documented; for Y Social's new app it
+ * makes no difference. Postiz keeps it as the placeholder linkedin-page_<id>
+ * and as rootInternalId of every page chosen from it: the one-time tokens of
+ * one login go to all rows with that value (IntegrationRepository).
+ *
+ * required (authenticate): an answer without an id throws, so no row
+ * linkedin-page_undefined can come up and share tokens with other logins
+ * (fail-closed). Without it (refreshToken) the tokens still count: Postiz
+ * keeps name and picture of the channel there and uses only the tokens.
+ * Errors name the status, never the token.
+ *
+ * The picture is the last one LinkedIn lists, if any; it only stands on the
+ * placeholder until the page with its logo is chosen.
  */
 export async function ysocialLinkedinUserinfo(
-  accessToken: string
+  accessToken: string,
+  options: { required?: boolean } = {}
 ): Promise<YsocialLinkedinUserinfo> {
-  const me = await (
-    await fetch(ME_URL, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    })
-  ).json();
+  const response = await fetch(ME_URL, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  if (options.required && !response.ok) {
+    throw new Error(`LinkedIn /v2/me answered ${response.status}`);
+  }
+  const me = await response.json().catch(() => null);
+  if (options.required && !(typeof me?.id === 'string' && me.id.trim())) {
+    throw new Error('LinkedIn /v2/me answered without an id');
+  }
 
   const images = me?.profilePicture?.['displayImage~']?.elements;
   const picture = Array.isArray(images)
