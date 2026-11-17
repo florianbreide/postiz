@@ -117,11 +117,15 @@ describe('inbox demo and automation (rule 2)', () => {
       ...sourceFiles(join(YSOCIAL_LIBRARY, 'webhooks')),
       join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.controller.ts'),
       join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.guard.ts'),
+      join(YSOCIAL_BACKEND, 'ysocial.inbox.events.guard.ts'),
+      join(YSOCIAL_LIBRARY, 'database', 'ysocial.webhook.repository.ts'),
     ];
     expect(receiver.map(rel)).toEqual(
       expect.arrayContaining([
         'libraries/ysocial/src/webhooks/ysocial.meta.webhook.service.ts',
         'apps/backend/src/ysocial/ysocial.meta.webhook.controller.ts',
+        'apps/backend/src/ysocial/ysocial.inbox.events.guard.ts',
+        'libraries/ysocial/src/database/ysocial.webhook.repository.ts',
       ])
     );
     for (const file of receiver) {
@@ -134,9 +138,25 @@ describe('inbox demo and automation (rule 2)', () => {
     }
   });
 
+  // PR 74: the repository of the receiver only reads channels: no write
+  // call of Prisma, no raw SQL, no token field in its select.
+  it('lets the webhook repository read channels only, without a token', () => {
+    const source = read(
+      join(YSOCIAL_LIBRARY, 'database', 'ysocial.webhook.repository.ts')
+    );
+    expect(source).not.toMatch(
+      /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/
+    );
+    expect(source).not.toMatch(/\$queryRaw|\$executeRaw|\$transaction/);
+    const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+    expect(code).not.toMatch(/\btoken\b|refreshToken|profile:|settings/i);
+  });
+
   // Allowlist instead of a blocklist: a new import in the receiver (Temporal,
   // an event to the hub, an HTTP client) has to be added here on purpose,
-  // with a review. The demo guard only reads YSOCIAL_DEMO_INTEGRATIONS.
+  // with a review. PR 74: the receiver rings the bell inbox.webhook at the
+  // hub (hub.event, hub.client, worker.config), reads the channels of a Page
+  // through its own repository and sits behind YsocialInboxEventsGuard.
   it('lets the webhook receiver import only what it needs', () => {
     const ALLOWED_IMPORTS = [
       'crypto',
@@ -144,10 +164,15 @@ describe('inbox demo and automation (rule 2)', () => {
       '@nestjs/common',
       '@nestjs/swagger',
       '@gitroom/nestjs-libraries/redis/redis.service',
+      '@gitroom/nestjs-libraries/database/prisma/prisma.service',
       '../service.token',
       './webhook.rules',
-      './ysocial.inbox.demo.guard',
+      './ysocial.inbox.events.guard',
       './ysocial.meta.webhook.guard',
+      '../events/hub.event',
+      '../events/hub.client',
+      '../worker/worker.config',
+      '../database/ysocial.webhook.repository',
       '../../../../libraries/ysocial/src/webhooks/webhook.rules',
       '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service',
     ];
@@ -155,6 +180,8 @@ describe('inbox demo and automation (rule 2)', () => {
       ...sourceFiles(join(YSOCIAL_LIBRARY, 'webhooks')),
       join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.controller.ts'),
       join(YSOCIAL_BACKEND, 'ysocial.meta.webhook.guard.ts'),
+      join(YSOCIAL_BACKEND, 'ysocial.inbox.events.guard.ts'),
+      join(YSOCIAL_LIBRARY, 'database', 'ysocial.webhook.repository.ts'),
     ];
     const imports = receiver.flatMap((file) =>
       [

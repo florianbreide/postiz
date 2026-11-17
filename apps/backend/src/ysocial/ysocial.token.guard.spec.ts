@@ -31,11 +31,13 @@ import { YsocialTestController } from './ysocial.test.controller';
 import { YsocialInboxController } from './ysocial.inbox.controller';
 import { YsocialMetaWebhookController } from './ysocial.meta.webhook.controller';
 import { YsocialMetaWebhookGuard } from './ysocial.meta.webhook.guard';
+import { YsocialInboxEventsGuard } from './ysocial.inbox.events.guard';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { YSOCIAL_WORKER_STATUS_KEY } from '../../../../libraries/ysocial/src/worker/worker.status';
@@ -199,6 +201,28 @@ describe('every ysocial controller', () => {
     }
   });
 
+  // PR 74: the switch YSOCIAL_INBOX_EVENTS comes in front of the guard of
+  // Meta, as an addition. It is no replacement for the token or for the
+  // guard of Meta.
+  it('puts YsocialInboxEventsGuard in front of YsocialMetaWebhookGuard on the receiver', () => {
+    const guards: unknown[] =
+      Reflect.getMetadata(GUARDS_METADATA, YsocialMetaWebhookController) ?? [];
+    expect(guards).toEqual([YsocialInboxEventsGuard, YsocialMetaWebhookGuard]);
+  });
+
+  it('does not accept YsocialInboxEventsGuard as protection of a controller', () => {
+    expect(ACCEPTED_GUARDS).not.toContain(YsocialInboxEventsGuard);
+    for (const controller of controllers) {
+      expect(EXCEPTIONS.get(controller)).not.toBe(YsocialInboxEventsGuard);
+    }
+    // Alone it would not pass the check of the receiver either.
+    expect(
+      isAcceptedGuard(YsocialMetaWebhookController)(
+        new YsocialInboxEventsGuard()
+      )
+    ).toBe(false);
+  });
+
   // GET (verification) and POST (event) on the path itself, nothing else.
   // A further route there would only have the verify token or the
   // signature in front of it.
@@ -237,6 +261,8 @@ describe('GET /ysocial/status', () => {
       .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
+      .useValue({})
+      .overrideProvider(YsocialWebhookRepository)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

@@ -26,6 +26,7 @@ import { YsocialReadRepository } from '../../../../libraries/ysocial/src/databas
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 
 const ENV = 'YSOCIAL_SERVICE_TOKEN';
@@ -118,6 +119,8 @@ describe('POST /ysocial/posts/:id/retry', () => {
       .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
+      .useValue({})
+      .overrideProvider(YsocialWebhookRepository)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

@@ -26,6 +26,7 @@ import { YsocialModule } from './ysocial.module';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialInboxService } from '../../../../libraries/ysocial/src/inbox/ysocial.inbox.service';
 import { FacebookInbox } from '../../../../libraries/ysocial/src/inbox/facebook.inbox';
@@ -41,6 +42,10 @@ import { InstagramInbox } from '../../../../libraries/ysocial/src/inbox/instagra
 const TOKEN_ENV = 'YSOCIAL_SERVICE_TOKEN';
 const LIST_ENV = 'YSOCIAL_DEMO_INTEGRATIONS';
 const SWITCH_ENV = 'YSOCIAL_INBOX_ENABLED';
+// Phase 3, PR 74: the webhook routes for every channel.
+const EVENTS_ENV = 'YSOCIAL_INBOX_EVENTS';
+const APP_ID_ENV = 'FACEBOOK_APP_ID';
+const APP_ID = '900000000000001';
 const serviceToken = randomBytes(32).toString('hex');
 const pageToken = randomBytes(24).toString('hex');
 const userToken = randomBytes(24).toString('hex');
@@ -329,9 +334,8 @@ const platforms = [
 ] as const;
 
 describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
-  const savedEnv = [TOKEN_ENV, LIST_ENV, SWITCH_ENV].map(
-    (name) => process.env[name]
-  );
+  const ENVS = [TOKEN_ENV, LIST_ENV, SWITCH_ENV, EVENTS_ENV, APP_ID_ENV];
+  const savedEnv = ENVS.map((name) => process.env[name]);
   const realFetch = global.fetch;
   let app: INestApplication;
   let baseUrl: string;
@@ -352,6 +356,8 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue(repository)
+      .overrideProvider(YsocialWebhookRepository)
+      .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     // Same pipe as apps/backend/src/main.ts.
@@ -371,7 +377,7 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
     (app.get(YsocialInboxService) as any).providers = savedProviders;
     await app?.close();
     global.fetch = realFetch;
-    [TOKEN_ENV, LIST_ENV, SWITCH_ENV].forEach((name, i) => {
+    ENVS.forEach((name, i) => {
       if (savedEnv[i] === undefined) {
         delete process.env[name];
       } else {
@@ -385,6 +391,9 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
     // The default of these tests: the switch on, no demo list.
     process.env[SWITCH_ENV] = 'true';
     delete process.env[LIST_ENV];
+    // The PR 73 tests run without the switch of PR 74.
+    delete process.env[EVENTS_ENV];
+    process.env[APP_ID_ENV] = APP_ID;
     jest.clearAllMocks();
     graphCalls.length = 0;
     responses = [];
@@ -714,6 +723,340 @@ describe('/ysocial/inbox for Facebook and Instagram (PR 73)', () => {
         );
         expect(sub.status).toBe(403);
         expect(graphCalls).toEqual([]);
+      });
+    });
+  });
+
+  // Phase 3, PR 74: the routes that put our app on the Page of a channel
+  // exist with the demo list or with YSOCIAL_INBOX_EVENTS=true, for every
+  // channel with the switch. YSOCIAL_INBOX_ENABLED alone does not open them,
+  // and the log of the events (/webhooks/events) stays with the demo list.
+  describe('the switch YSOCIAL_INBOX_EVENTS and the webhook routes (PR 74)', () => {
+    const getWebhooks = (id: string, opts?: any) =>
+      request('GET', `/integrations/${id}/webhooks`, opts);
+    const subscribe = (id: string, opts?: any) =>
+      request('POST', `/integrations/${id}/webhooks`, opts);
+    const eventsLog = (opts?: any) => request('GET', '/webhooks/events', opts);
+
+    const webhookGraph = ({ method, url }: GraphCall): Response =>
+      url.pathname.endsWith('/subscribed_apps')
+        ? method === 'GET'
+          ? json({ data: [{ id: APP_ID, subscribed_fields: ['feed'] }] })
+          : json({ success: true })
+        : json({ error: { message: 'unexpected call', code: 1 } }, 400);
+
+    beforeEach(() => {
+      graphHandler = webhookGraph;
+    });
+
+    const nothingHappened = () => {
+      expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+      expect(graphCalls).toEqual([]);
+    };
+
+    describe('with the switch and no demo list', () => {
+      beforeEach(() => {
+        delete process.env[SWITCH_ENV];
+        delete process.env[LIST_ENV];
+        process.env[EVENTS_ENV] = 'true';
+      });
+
+      it.each([
+        ['facebook', FB_CHANNEL],
+        ['instagram', IG_CHANNEL],
+      ])(
+        'answers whether the app is on the Page of a %s channel off any list',
+        async (provider, channel) => {
+          const res = await getWebhooks(channel);
+          expect(res.status).toBe(200);
+          expect(res.json()).toEqual({
+            integrationId: channel,
+            provider,
+            subscribed: true,
+            fields: ['feed'],
+          });
+          expect(repository.getChannelForInbox).toHaveBeenCalledWith(channel);
+          expect(graphCalls).toHaveLength(1);
+          expect(graphCalls[0].method).toBe('GET');
+          expect(logLines).toEqual([
+            `inbox webhooks channel=${channel} result=ok subscribed=true fields=feed`,
+          ]);
+        }
+      );
+
+      it('puts the app on the Page of a channel off any list, with the actor', async () => {
+        const res = await subscribe(FB_CHANNEL);
+        expect(res.status).toBe(200);
+        expect(res.json()).toEqual({
+          integrationId: FB_CHANNEL,
+          provider: 'facebook',
+          subscribed: true,
+          fields: ['feed'],
+        });
+        expect(writes()).toHaveLength(1);
+        expect(writes()[0].method).toBe('POST');
+        expect(logLines).toEqual([
+          `inbox subscribe channel=${FB_CHANNEL} actor=${ACTOR} result=done`,
+        ]);
+      });
+
+      it('answers 400 actor_missing for the subscription without an actor, and does not call Meta', async () => {
+        const res = await subscribe(FB_CHANNEL, { actor: null });
+        expect(res.status).toBe(400);
+        expect(res.json()).toMatchObject({ code: 'actor_missing' });
+        nothingHappened();
+      });
+
+      it('still needs the service token', async () => {
+        for (const auth of ['', 'Bearer wrong']) {
+          expect((await getWebhooks(FB_CHANNEL, { auth })).status).toBe(401);
+          expect((await subscribe(FB_CHANNEL, { auth })).status).toBe(401);
+        }
+        nothingHappened();
+      });
+
+      it('answers 503 without a configured service token', async () => {
+        delete process.env[TOKEN_ENV];
+        expect((await getWebhooks(FB_CHANNEL)).status).toBe(503);
+        expect((await subscribe(FB_CHANNEL)).status).toBe(503);
+        process.env[TOKEN_ENV] = serviceToken;
+        nothingHappened();
+      });
+
+      it.each(['int.bad', 'int%20bad', 'a'.repeat(65), 'x%2F..'])(
+        'answers 404 not_found for the id "%s" without a database or Graph call',
+        async (id) => {
+          for (const run of [() => getWebhooks(id), () => subscribe(id)]) {
+            const res = await run();
+            expect(res.status).toBe(404);
+            expect(res.json()).toMatchObject({ code: 'not_found' });
+          }
+          nothingHappened();
+          expect(logLines.join('\n')).not.toContain(id);
+        }
+      );
+
+      it('answers 404 not_found for a valid id that is no channel', async () => {
+        const res = await getWebhooks('int-unknown-1');
+        expect(res.status).toBe(404);
+        expect(res.json()).toMatchObject({ code: 'not_found' });
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('answers 409 channel_inactive for a disabled channel and calls nobody', async () => {
+        repository.getChannelForInbox.mockResolvedValue({
+          ...row(FB_CHANNEL),
+          disabled: true,
+        });
+        for (const run of [
+          () => getWebhooks(FB_CHANNEL),
+          () => subscribe(FB_CHANNEL),
+        ]) {
+          const res = await run();
+          expect(res.status).toBe(409);
+          expect(res.json()).toMatchObject({ code: 'channel_inactive' });
+        }
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('answers 409 provider_not_supported for a provider without an inbox', async () => {
+        repository.getChannelForInbox.mockResolvedValue({
+          ...row(FB_CHANNEL),
+          providerIdentifier: 'x',
+        });
+        expect((await getWebhooks(FB_CHANNEL)).status).toBe(409);
+        expect((await subscribe(FB_CHANNEL)).status).toBe(409);
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('does not open the log of the events: 404 before the token, nothing read', async () => {
+        for (const auth of [`Bearer ${serviceToken}`, 'Bearer wrong', '']) {
+          expect((await eventsLog({ auth })).status).toBe(404);
+        }
+        nothingHappened();
+      });
+
+      it('does not open the other inbox routes: 404 before the token, nothing touched', async () => {
+        for (const auth of [`Bearer ${serviceToken}`, '']) {
+          for (const [method, path] of [
+            ['GET', `/integrations/${FB_CHANNEL}/capabilities`],
+            ['GET', `/integrations/${FB_CHANNEL}/items`],
+            ['GET', `/integrations/${FB_CHANNEL}/comments`],
+            ['GET', `/integrations/${FB_CHANNEL}/comments/${FB_COMMENT}`],
+            ['POST', `/integrations/${FB_CHANNEL}/comments/${FB_COMMENT}/like`],
+            ['DELETE', `/integrations/${FB_CHANNEL}/comments/${FB_COMMENT}`],
+          ] as const) {
+            expect((await request(method, path, { auth })).status).toBe(404);
+          }
+        }
+        nothingHappened();
+      });
+    });
+
+    describe.each([
+      ['no switch', undefined],
+      ['the switch "false"', 'false'],
+      ['the switch "TRUE"', 'TRUE'],
+      ['the switch "1"', '1'],
+      ['the switch ""', ''],
+      ['the switch " true"', ' true'],
+    ])(
+      'with %s, no demo list and YSOCIAL_INBOX_ENABLED=true',
+      (_name, value) => {
+        beforeEach(() => {
+          process.env[SWITCH_ENV] = 'true';
+          delete process.env[LIST_ENV];
+          if (value === undefined) {
+            delete process.env[EVENTS_ENV];
+          } else {
+            process.env[EVENTS_ENV] = value;
+          }
+        });
+
+        it('answers 404 on both webhook routes and the log, before the token', async () => {
+          for (const auth of [`Bearer ${serviceToken}`, 'Bearer wrong', '']) {
+            expect((await getWebhooks(FB_CHANNEL, { auth })).status).toBe(404);
+            expect((await subscribe(FB_CHANNEL, { auth })).status).toBe(404);
+            expect((await eventsLog({ auth })).status).toBe(404);
+          }
+          nothingHappened();
+          expect(logLines).toEqual([]);
+        });
+
+        it('keeps the other inbox routes for the channel (the switch of PR 73)', async () => {
+          graphHandler = facebookGraph;
+          expect((await capabilities(FB_CHANNEL)).status).toBe(200);
+        });
+      }
+    );
+
+    describe('with the demo list and no switch', () => {
+      beforeEach(() => {
+        delete process.env[SWITCH_ENV];
+        delete process.env[EVENTS_ENV];
+        process.env[LIST_ENV] = DEMO;
+      });
+
+      it('serves the listed channel on the webhook routes', async () => {
+        expect((await getWebhooks(DEMO)).status).toBe(200);
+        expect((await subscribe(DEMO)).status).toBe(200);
+        expect((await eventsLog()).status).toBe(200);
+      });
+
+      it('answers 403 not_demo_integration for a channel off the list, without a call', async () => {
+        for (const run of [
+          () => getWebhooks(FB_CHANNEL),
+          () => subscribe(FB_CHANNEL),
+        ]) {
+          const res = await run();
+          expect(res.status).toBe(403);
+          expect(res.json()).toMatchObject({ code: 'not_demo_integration' });
+        }
+        nothingHappened();
+        expect(logLines).toEqual([
+          'inbox webhooks channel=- result=rejected code=not_demo_integration',
+          `inbox subscribe channel=- actor=${ACTOR} result=rejected code=not_demo_integration`,
+        ]);
+      });
+
+      it('answers 403, not 404, for an id that is no Postiz id (no switch)', async () => {
+        const res = await getWebhooks('int.bad');
+        expect(res.status).toBe(403);
+        nothingHappened();
+      });
+    });
+
+    describe('with the demo list and YSOCIAL_INBOX_ENABLED=true but not the events switch', () => {
+      beforeEach(() => {
+        process.env[SWITCH_ENV] = 'true';
+        delete process.env[EVENTS_ENV];
+        process.env[LIST_ENV] = DEMO;
+      });
+
+      it('does not widen the webhook routes: 403 for a channel off the list', async () => {
+        expect((await getWebhooks(FB_CHANNEL)).status).toBe(403);
+        expect((await subscribe(FB_CHANNEL)).status).toBe(403);
+        nothingHappened();
+      });
+
+      it('serves the listed channel', async () => {
+        expect((await getWebhooks(DEMO)).status).toBe(200);
+      });
+    });
+
+    describe('with the demo list and the events switch', () => {
+      beforeEach(() => {
+        delete process.env[SWITCH_ENV];
+        process.env[EVENTS_ENV] = 'true';
+        process.env[LIST_ENV] = DEMO;
+      });
+
+      it('serves the listed channel and a channel off the list on the webhook routes', async () => {
+        for (const channel of [DEMO, FB_CHANNEL]) {
+          expect((await getWebhooks(channel)).status).toBe(200);
+          expect((await subscribe(channel)).status).toBe(200);
+        }
+      });
+
+      it('answers 404 not_found for an id that is no Postiz id (the switch is on)', async () => {
+        const res = await getWebhooks('int.bad');
+        expect(res.status).toBe(404);
+        expect(res.json()).toMatchObject({ code: 'not_found' });
+        nothingHappened();
+      });
+
+      it('keeps the log of the events and the inbox for the demo list', async () => {
+        expect((await eventsLog()).status).toBe(200);
+        graphHandler = facebookGraph;
+        expect((await capabilities(DEMO)).status).toBe(200);
+      });
+
+      it('answers 403 not_demo_integration, not 404, on an inbox route for an id that is no Postiz id', async () => {
+        graphHandler = facebookGraph;
+        for (const run of [
+          () => capabilities('int.bad'),
+          () => items('int.bad'),
+          () => comment('int.bad', FB_COMMENT),
+        ]) {
+          const res = await run();
+          expect(res.status).toBe(403);
+          expect(res.json()).toMatchObject({ code: 'not_demo_integration' });
+        }
+        expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+        expect(graphCalls).toEqual([]);
+      });
+
+      it('does not widen the other inbox routes: 403 not_demo_integration off the list', async () => {
+        graphHandler = facebookGraph;
+        for (const run of [
+          () => capabilities(FB_CHANNEL),
+          () => items(FB_CHANNEL),
+          () => comment(FB_CHANNEL, FB_COMMENT),
+          () => like(FB_CHANNEL, FB_COMMENT),
+        ]) {
+          const res = await run();
+          expect(res.status).toBe(403);
+          expect(res.json()).toMatchObject({ code: 'not_demo_integration' });
+        }
+        expect(repository.getChannelForInbox).not.toHaveBeenCalled();
+        expect(graphCalls).toEqual([]);
+      });
+    });
+
+    describe('with both switches and no demo list', () => {
+      beforeEach(() => {
+        process.env[SWITCH_ENV] = 'true';
+        process.env[EVENTS_ENV] = 'true';
+        delete process.env[LIST_ENV];
+      });
+
+      it('serves the webhook routes and the inbox, but not the log of the events', async () => {
+        graphHandler = facebookGraph;
+        expect((await capabilities(FB_CHANNEL)).status).toBe(200);
+        graphHandler = webhookGraph;
+        expect((await getWebhooks(FB_CHANNEL)).status).toBe(200);
+        expect((await subscribe(FB_CHANNEL)).status).toBe(200);
+        expect((await eventsLog()).status).toBe(404);
       });
     });
   });

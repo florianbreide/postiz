@@ -13,6 +13,7 @@ import { YsocialModule } from './ysocial.module';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialTestSwitchService } from '../../../../libraries/ysocial/src/health/ysocial.test.switch.service';
 
@@ -49,6 +50,8 @@ describe('/ysocial/test/integrations/:id/invalid-token', () => {
       .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
+      .useValue({})
+      .overrideProvider(YsocialWebhookRepository)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

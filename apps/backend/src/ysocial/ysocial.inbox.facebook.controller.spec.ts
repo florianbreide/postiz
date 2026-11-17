@@ -26,6 +26,7 @@ import { YsocialModule } from './ysocial.module';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 
 const TOKEN_ENV = 'YSOCIAL_SERVICE_TOKEN';
@@ -203,6 +204,8 @@ describe('/ysocial/inbox with a Facebook Page', () => {
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue(repository)
+      .overrideProvider(YsocialWebhookRepository)
+      .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });
     // Same pipe as apps/backend/src/main.ts.

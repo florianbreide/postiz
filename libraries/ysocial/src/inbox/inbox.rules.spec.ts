@@ -11,6 +11,7 @@ import {
   inboxEnabled,
   InboxPlatformError,
   inboxRoutesEnabled,
+  inboxWebhookRoutesEnabled,
   InboxUsageMeter,
   inboxWindow,
   isDemoIntegration,
@@ -155,6 +156,40 @@ describe('inboxEnabled and inboxRoutesEnabled (PR 73)', () => {
 
   it('does not let the switch open the demo-only check', () => {
     expect(inboxDemoEnabled(inbox('true'))).toBe(false);
+  });
+});
+
+describe('inboxWebhookRoutesEnabled (PR 74)', () => {
+  it('is on with the demo list or with YSOCIAL_INBOX_EVENTS=true', () => {
+    expect(inboxWebhookRoutesEnabled(env('int-demo-1'))).toBe(true);
+    expect(inboxWebhookRoutesEnabled({ YSOCIAL_INBOX_EVENTS: 'true' })).toBe(
+      true
+    );
+  });
+
+  it('is off with YSOCIAL_INBOX_ENABLED=true alone', () => {
+    expect(
+      inboxWebhookRoutesEnabled({ [YSOCIAL_INBOX_ENABLED_ENV]: 'true' })
+    ).toBe(false);
+  });
+
+  it.each([undefined, '', 'false', 'TRUE', '1'])(
+    'is off for the switch %j without a demo list',
+    (value) => {
+      expect(inboxWebhookRoutesEnabled({ YSOCIAL_INBOX_EVENTS: value })).toBe(
+        false
+      );
+      expect(
+        inboxWebhookRoutesEnabled({
+          ...env(' , '),
+          YSOCIAL_INBOX_EVENTS: value,
+        })
+      ).toBe(false);
+    }
+  );
+
+  it('does not switch on the other inbox routes', () => {
+    expect(inboxRoutesEnabled({ YSOCIAL_INBOX_EVENTS: 'true' })).toBe(false);
   });
 });
 

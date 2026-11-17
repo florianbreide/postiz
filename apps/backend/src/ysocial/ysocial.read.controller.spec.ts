@@ -23,6 +23,7 @@ import {
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 
 const ENV = 'YSOCIAL_SERVICE_TOKEN';
 const token = randomBytes(32).toString('hex');
@@ -238,6 +239,8 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
       .overrideProvider(YsocialTokenKeyCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
+      .useValue({})
+      .overrideProvider(YsocialWebhookRepository)
       .useValue({})
       .compile();
     app = moduleRef.createNestApplication({ logger: false });

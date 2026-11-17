@@ -1,10 +1,20 @@
 import { createHmac, randomBytes } from 'crypto';
+import { HUB_EVENT_KINDS } from '../events/hub.event';
 import {
   checkSignature,
   checkVerifyRequest,
+  demoLogEnabled,
+  inboxEventsEnabled,
+  inboxWebhookEvent,
+  INBOX_WEBHOOK_ID_MAX,
   isChallenge,
+  isCommentEvent,
   META_APP_SECRET_ENV,
+  WEBHOOK_PROVIDERS,
+  WebhookChannel,
+  WebhookEvent,
   webhookEvents,
+  YSOCIAL_INBOX_EVENTS_ENV,
   YSOCIAL_META_WEBHOOK_VERIFY_TOKEN_ENV,
 } from './webhook.rules';
 
@@ -719,5 +729,289 @@ describe('webhookEvents', () => {
         'createdAt',
       ].sort()
     );
+  });
+});
+
+describe('inboxEventsEnabled', () => {
+  it('is on only for exactly "true" (fail-closed)', () => {
+    expect(YSOCIAL_INBOX_EVENTS_ENV).toBe('YSOCIAL_INBOX_EVENTS');
+    expect(inboxEventsEnabled({ YSOCIAL_INBOX_EVENTS: 'true' })).toBe(true);
+    for (const value of [
+      undefined,
+      '',
+      'false',
+      'TRUE',
+      'True',
+      '1',
+      ' true',
+      'yes',
+      'on',
+    ]) {
+      expect(inboxEventsEnabled({ YSOCIAL_INBOX_EVENTS: value })).toBe(false);
+    }
+    expect(inboxEventsEnabled({})).toBe(false);
+  });
+
+  it('does not depend on the demo list or on YSOCIAL_INBOX_ENABLED', () => {
+    expect(
+      inboxEventsEnabled({
+        YSOCIAL_DEMO_INTEGRATIONS: 'int-1',
+        YSOCIAL_INBOX_ENABLED: 'true',
+      })
+    ).toBe(false);
+  });
+});
+
+describe('demoLogEnabled', () => {
+  it('is on with at least one channel in the demo list', () => {
+    expect(demoLogEnabled({ YSOCIAL_DEMO_INTEGRATIONS: 'int-1' })).toBe(true);
+    expect(
+      demoLogEnabled({ YSOCIAL_DEMO_INTEGRATIONS: ' int-1 , int-2 ' })
+    ).toBe(true);
+    expect(demoLogEnabled({ YSOCIAL_DEMO_INTEGRATIONS: ',int-1' })).toBe(true);
+  });
+
+  it.each([undefined, '', '   ', ',', ' , ,, ', ',,'])(
+    'is off for an empty list (%j)',
+    (value) => {
+      expect(demoLogEnabled({ YSOCIAL_DEMO_INTEGRATIONS: value })).toBe(false);
+    }
+  );
+
+  it('is off without the variable and not switched on by YSOCIAL_INBOX_EVENTS', () => {
+    expect(demoLogEnabled({})).toBe(false);
+    expect(demoLogEnabled({ YSOCIAL_INBOX_EVENTS: 'true' })).toBe(false);
+  });
+});
+
+const baseEvent: WebhookEvent = {
+  receivedAt: '2026-11-17T12:00:00.000Z',
+  object: 'page',
+  entryId: '100000000000001',
+  sentAt: '2026-11-17T11:59:00.000Z',
+  field: 'feed',
+  item: 'comment',
+  verb: 'add',
+  postId: '100000000000001_200000000000001',
+  commentId: '100000000000001_200000000000001_300000000000001',
+  parentId: '100000000000001_200000000000001',
+  mediaId: null,
+  createdAt: '2026-11-17T11:58:00.000Z',
+};
+const event = (override: Partial<WebhookEvent> = {}): WebhookEvent => ({
+  ...baseEvent,
+  ...override,
+});
+
+describe('isCommentEvent', () => {
+  it('accepts a Page feed comment with every verb', () => {
+    for (const verb of ['add', 'edited', 'remove', 'hide', 'unhide', null]) {
+      expect(isCommentEvent(event({ verb }))).toBe(true);
+    }
+  });
+
+  it('accepts an Instagram comments change', () => {
+    expect(
+      isCommentEvent(
+        event({
+          object: 'instagram',
+          field: 'comments',
+          item: null,
+          verb: null,
+        })
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a reaction', { item: 'reaction' }],
+    ['a post', { item: 'status' }],
+    ['a feed change without item', { item: null }],
+    ['a Page change of another field', { field: 'ratings' }],
+    ['a Page "comments" field', { field: 'comments' }],
+    ['an Instagram feed change', { object: 'instagram', field: 'feed' }],
+    [
+      'an Instagram mention',
+      { object: 'instagram', field: 'mentions', item: null },
+    ],
+    ['another object', { object: 'user' }],
+  ])('rejects %s', (_name, override) => {
+    expect(isCommentEvent(event(override))).toBe(false);
+  });
+});
+
+describe('WEBHOOK_PROVIDERS', () => {
+  it('maps the two objects to the Postiz providers', () => {
+    expect(WEBHOOK_PROVIDERS).toEqual({
+      page: 'facebook',
+      instagram: 'instagram',
+    });
+  });
+});
+
+describe('inboxWebhookEvent', () => {
+  const channel: WebhookChannel = {
+    id: 'int-1',
+    organizationId: 'org-1',
+    customerId: null,
+    providerIdentifier: 'facebook',
+  };
+  const SENT_MS = Date.parse(baseEvent.sentAt as string);
+
+  it('has the kind in the list of hub events', () => {
+    expect(HUB_EVENT_KINDS).toContain('inbox.webhook');
+    expect(INBOX_WEBHOOK_ID_MAX).toBe(300);
+  });
+
+  it('builds the bell with ids and exactly the 12 data fields', () => {
+    const bell = inboxWebhookEvent(event(), channel);
+    expect(bell).toEqual({
+      id: `inbox.webhook:int-1:${baseEvent.commentId}.add.${SENT_MS}`,
+      version: 1,
+      kind: 'inbox.webhook',
+      occurredAt: baseEvent.sentAt,
+      source: 'postiz',
+      subject: { type: 'channel', id: 'int-1' },
+      postiz: {
+        organizationId: 'org-1',
+        integrationId: 'int-1',
+        customerId: null,
+        providerIdentifier: 'facebook',
+      },
+      data: {
+        object: 'page',
+        entryId: baseEvent.entryId,
+        field: 'feed',
+        item: 'comment',
+        verb: 'add',
+        postId: baseEvent.postId,
+        commentId: baseEvent.commentId,
+        parentId: baseEvent.parentId,
+        mediaId: null,
+        createdAt: baseEvent.createdAt,
+        sentAt: baseEvent.sentAt,
+        receivedAt: baseEvent.receivedAt,
+      },
+    });
+    expect(Object.keys(bell!.data!)).toHaveLength(12);
+    expect(bell).not.toHaveProperty('reason');
+  });
+
+  it('is the same bell for the same event and another one for another time', () => {
+    expect(inboxWebhookEvent(event(), channel)).toEqual(
+      inboxWebhookEvent(event(), channel)
+    );
+    const later = inboxWebhookEvent(
+      event({ sentAt: '2026-11-17T11:59:05.000Z' }),
+      channel
+    );
+    expect(later!.id).not.toBe(inboxWebhookEvent(event(), channel)!.id);
+  });
+
+  it('is another bell for another channel', () => {
+    const other = inboxWebhookEvent(event(), { ...channel, id: 'int-2' });
+    expect(other!.id).not.toBe(inboxWebhookEvent(event(), channel)!.id);
+    expect(other!.subject.id).toBe('int-2');
+  });
+
+  it('takes the target from commentId, then postId, then mediaId', () => {
+    const noComment = event({ commentId: null });
+    expect(inboxWebhookEvent(noComment, channel)!.id).toContain(
+      `:${baseEvent.postId}.add.`
+    );
+    const mediaOnly = event({
+      commentId: null,
+      postId: null,
+      mediaId: '17900000000000001',
+    });
+    expect(inboxWebhookEvent(mediaOnly, channel)!.id).toContain(
+      ':17900000000000001.add.'
+    );
+  });
+
+  it('returns null without a comment, post or media id', () => {
+    expect(
+      inboxWebhookEvent(
+        event({ commentId: null, postId: null, mediaId: null }),
+        channel
+      )
+    ).toBeNull();
+  });
+
+  it('takes the verb for the state, and the field when there is no verb', () => {
+    expect(inboxWebhookEvent(event({ verb: 'edited' }), channel)!.id).toContain(
+      '.edited.'
+    );
+    expect(inboxWebhookEvent(event({ verb: null }), channel)!.id).toContain(
+      '.feed.'
+    );
+  });
+
+  it('takes the time from sentAt, then createdAt, then receivedAt', () => {
+    const sent = inboxWebhookEvent(event(), channel)!;
+    expect(sent.occurredAt).toBe(baseEvent.sentAt);
+    const created = inboxWebhookEvent(event({ sentAt: null }), channel)!;
+    expect(created.occurredAt).toBe(baseEvent.createdAt);
+    expect(
+      created.id.endsWith(`.${Date.parse(baseEvent.createdAt as string)}`)
+    ).toBe(true);
+    const received = inboxWebhookEvent(
+      event({ sentAt: null, createdAt: null }),
+      channel
+    )!;
+    expect(received.occurredAt).toBe(baseEvent.receivedAt);
+    expect(received.id.endsWith(`.${Date.parse(baseEvent.receivedAt)}`)).toBe(
+      true
+    );
+  });
+
+  it('sends customerId null for an empty customer and the id of a customer', () => {
+    expect(
+      inboxWebhookEvent(event(), { ...channel, customerId: '' })!.postiz
+        .customerId
+    ).toBeNull();
+    expect(
+      inboxWebhookEvent(event(), { ...channel, customerId: 'cust-1' })!.postiz
+        .customerId
+    ).toBe('cust-1');
+  });
+
+  it('keeps null fields in data (Instagram has no item and no verb)', () => {
+    const bell = inboxWebhookEvent(
+      event({
+        object: 'instagram',
+        field: 'comments',
+        item: null,
+        verb: null,
+        postId: null,
+        parentId: null,
+        mediaId: '17900000000000001',
+      }),
+      { ...channel, providerIdentifier: 'instagram' }
+    )!;
+    expect(bell.data).toMatchObject({ item: null, verb: null, postId: null });
+    expect(bell.id).toContain('.comments.');
+  });
+
+  it('returns null for an id longer than 300 characters and keeps one of exactly 300', () => {
+    // Measure with a one-character channel id.
+    const one = inboxWebhookEvent(event(), { ...channel, id: 'c' })!.id.length;
+    const exact = 'c'.repeat(300 - (one - 1));
+    expect(
+      inboxWebhookEvent(event(), { ...channel, id: exact })!.id
+    ).toHaveLength(300);
+    expect(
+      inboxWebhookEvent(event(), { ...channel, id: `${exact}c` })
+    ).toBeNull();
+  });
+
+  it('returns null instead of throwing for a channel id with a blank or no id', () => {
+    expect(inboxWebhookEvent(event(), { ...channel, id: 'int 1' })).toBeNull();
+    expect(inboxWebhookEvent(event(), { ...channel, id: '' })).toBeNull();
+  });
+
+  it('never carries a text, a name or a reason', () => {
+    const text = JSON.stringify(inboxWebhookEvent(event(), channel));
+    expect(text).not.toMatch(/"(message|text|from|name|username|reason)"/);
   });
 });
