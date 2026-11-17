@@ -1,5 +1,3 @@
-import { META_GRAPH_API_VERSION } from '@gitroom/nestjs-libraries/integrations/social/facebook.provider';
-import { sanitizeReason } from '../events/hub.event';
 import {
   INBOX_COMMENTS_LIMIT,
   INBOX_POSTS_LIMIT,
@@ -10,6 +8,13 @@ import {
   InboxReply,
   YsocialInboxProvider,
 } from './inbox.rules';
+import {
+  count,
+  expectSuccess,
+  GraphObject,
+  metaGraph,
+  text,
+} from './meta.graph';
 
 /**
  * Inbox for the Postiz provider "instagram" (Instagram API with Facebook
@@ -51,17 +56,11 @@ import {
  *
  * Token: Integration.token of "instagram" is "<page token>___<user token>"
  * (fetchPageInformation). Like comment() and analytics() of the Postiz
- * provider, every call uses the Page token. The token goes in the query
- * (GET, DELETE) or the form body (POST), never into a log. The message of
- * a reply goes in the body, not into the URL.
+ * provider, every call uses the Page token (meta.graph.ts).
  */
-
-const GRAPH_TIMEOUT_MS = 15_000;
 
 const MEDIA_FIELDS = 'id,permalink,timestamp,media_type,comments_count';
 const COMMENT_FIELDS = 'id,text,timestamp,username,like_count,hidden';
-
-type GraphObject = Record<string, any>;
 
 // Instagram ids (account, media, comment) are digits only. Stricter than
 // isPlatformId: a Facebook id like <page>_<post> must never reach a call
@@ -75,14 +74,6 @@ const isUnknownObject = (err: unknown) =>
   err instanceof InboxPlatformError &&
   err.details.code === 100 &&
   err.details.subcode === 33;
-
-const text = (value: unknown) =>
-  typeof value === 'string' && value ? value : null;
-
-const count = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
 
 const toReply = (row: GraphObject): InboxReply => ({
   id: String(row.id),
@@ -186,7 +177,7 @@ export class InstagramInbox implements YsocialInboxProvider {
   }
 
   async hide(channel: InboxChannel, commentId: string, hide: boolean) {
-    this.expectSuccess(
+    expectSuccess(
       await this.graph('POST', channel, commentId, undefined, {
         hide: String(hide),
       })
@@ -194,19 +185,9 @@ export class InstagramInbox implements YsocialInboxProvider {
   }
 
   async remove(channel: InboxChannel, commentId: string) {
-    this.expectSuccess(
+    expectSuccess(
       await this.graph('DELETE', channel, commentId, undefined, {})
     );
-  }
-
-  private expectSuccess(result: GraphObject) {
-    if (result?.success !== true) {
-      throw new InboxPlatformError({
-        unavailable: false,
-        status: 200,
-        reason: 'Die Plattform hat den Erfolg nicht bestätigt.',
-      });
-    }
   }
 
   private async graph(
@@ -220,46 +201,6 @@ export class InstagramInbox implements YsocialInboxProvider {
       throw new Error('ysocial inbox: invalid platform id');
     }
     const [accessToken] = channel.token.split('___');
-    const values = new URLSearchParams({
-      ...params,
-      access_token: accessToken,
-    });
-    const url = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${id}${
-      edge ? `/${edge}` : ''
-    }`;
-
-    let res: Response;
-    try {
-      res = await fetch(method === 'POST' ? url : `${url}?${values}`, {
-        method,
-        ...(method === 'POST' ? { body: values } : {}),
-        signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
-      });
-    } catch (err) {
-      // Network error or timeout. The cause is not passed on, it may
-      // carry the URL with the token.
-      throw new InboxPlatformError({ unavailable: true });
-    }
-
-    const body: GraphObject | undefined = await res
-      .json()
-      .catch(() => undefined);
-    if (!res.ok || body?.error) {
-      const error = body?.error || {};
-      throw new InboxPlatformError({
-        unavailable: false,
-        status: res.status,
-        code: typeof error.code === 'number' ? error.code : undefined,
-        subcode:
-          typeof error.error_subcode === 'number'
-            ? error.error_subcode
-            : undefined,
-        reason:
-          typeof error.message === 'string'
-            ? sanitizeReason(error.message)
-            : undefined,
-      });
-    }
-    return body || {};
+    return metaGraph(method, accessToken, edge ? `${id}/${edge}` : id, params);
   }
 }

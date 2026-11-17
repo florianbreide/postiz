@@ -40,7 +40,9 @@ describe('inbox demo and automation (rule 2)', () => {
       const source = read(file);
       expect(source).not.toMatch(/inbox\//i);
       expect(source).not.toMatch(/ysocial\.inbox/i);
-      expect(source).not.toMatch(/YsocialInbox|InstagramInbox|InboxProvider/);
+      expect(source).not.toMatch(
+        /YsocialInbox|InstagramInbox|FacebookInbox|InboxProvider|metaGraph/
+      );
     }
   );
 
@@ -108,6 +110,9 @@ describe('inbox demo and automation (rule 2)', () => {
   describe('importers of the inbox', () => {
     const ALLOWED = [
       'libraries/ysocial/src/inbox/ysocial.inbox.service.ts',
+      // The two providers share the Graph call of meta.graph.ts.
+      'libraries/ysocial/src/inbox/instagram.inbox.ts',
+      'libraries/ysocial/src/inbox/facebook.inbox.ts',
       'apps/backend/src/ysocial/ysocial.inbox.controller.ts',
       'apps/backend/src/ysocial/ysocial.module.ts',
       'libraries/ysocial/src/dtos/ysocial.inbox.dto.ts',
@@ -115,7 +120,7 @@ describe('inbox demo and automation (rule 2)', () => {
     ];
     const IMPORT = /(?:from|import\(|require\()\s*['"]([^'"]+)['"]/g;
     const INBOX_SPECIFIER =
-      /(^|\/)inbox\/|instagram\.inbox|ysocial\.inbox\.service/;
+      /(^|\/)inbox\/|instagram\.inbox|facebook\.inbox|meta\.graph|ysocial\.inbox\.service/;
 
     const roots = ['apps', 'libraries'].flatMap((top) =>
       readdirSync(join(ROOT, top))
