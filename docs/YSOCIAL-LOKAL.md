@@ -67,6 +67,7 @@ Nach jedem neuen Clone einmal:
 | `YSOCIAL_SERVICE_TOKEN` | Ausgabe von `openssl rand -hex 32` | mindestens 32 Zeichen. Fehlt er, antwortet `/ysocial/status` mit 503 |
 | `DISABLE_REGISTRATION` | `true` | Genau eine Registrierung geht trotzdem, solange es keine Organisation gibt (`auth.service.ts`) |
 | `YSOCIAL_TOKEN_KEY` | Ausgabe von `openssl rand -base64 32` | optional. Mit Schlüssel speichert Postiz Kanal-Tokens verschlüsselt (`ys1:…`). Ohne Schlüssel bleiben sie Klartext. Sobald es verschlüsselte Tokens gibt, starten Backend und Orchestrator ohne den Schlüssel nicht mehr. Nicht wechseln, sonst sind die gespeicherten Tokens unlesbar |
+| `YSOCIAL_TEMPORAL_KEY` | eigene Ausgabe von `openssl rand -base64 32`, nicht der Wert von `YSOCIAL_TOKEN_KEY` | optional. Mit Schlüssel verschlüsselt Postiz die Payloads im Temporal-Namespace `default`, die Temporal-UI zeigt dann `binary/encrypted`. Beim ersten Start mit Schlüssel merkt sich der Namespace die Schlüssel-ID, danach starten Backend und Orchestrator ohne den Schlüssel nicht mehr. Ab PR 40 starten beide nur, wenn Temporal antwortet: erst Docker, dann `pnpm run dev`. Zurück ohne Schlüssel: `docker exec temporal temporal operator namespace update --namespace default --data 'ysocial-payload-codec="off"' --address temporal:7233`, oder Temporal leer neu starten (`down` und `up`, siehe unten) |
 
 Alle `*_CLIENT_ID`, `*_SECRET`, `*_API_KEY` bleiben leer. `RESEND_API_KEY` bleibt auskommentiert, dann ist ein neuer Nutzer sofort aktiv.
 
@@ -129,7 +130,7 @@ Die Datei hat die Rechte 600 und steht in `.git/info/exclude` (siehe „Lokale D
 
     corepack pnpm exec jest -c libraries/ysocial/jest.config.js
 
-Erwartet (Stand PR 25): alle Test-Suiten grün, zwei übersprungen: der Test gegen einen echten Temporal-Server (siehe unten) und der Integrationstest der Token-Verschlüsselung (nur mit `YSOCIAL_IT_DATABASE_URL`). Die übrigen Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat oder ein Pfad `/auth` enthält. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
+Erwartet (Stand PR 40): alle Test-Suiten grün, drei übersprungen: die beiden Tests gegen einen echten Temporal-Server, Worker und Payload-Codec (siehe unten), und der Integrationstest der Token-Verschlüsselung (nur mit `YSOCIAL_IT_DATABASE_URL`). Die übrigen Tests nutzen keine Datenbank und laden keine `.env`: `@prisma/client` ist dort durch einen Stub ersetzt. Ein Test findet jeden Controller in `apps/backend/src/ysocial/` und schlägt fehl, wenn einer keinen `YsocialTokenGuard` hat oder ein Pfad `/auth` enthält. `pnpm test` im Root läuft upstream nicht, weil `@nx/jest` fehlt.
 
 ### Integrationstest der Token-Verschlüsselung (ab PR 25)
 
@@ -150,6 +151,15 @@ Der ysocial-Worker im Orchestrator braucht einen eigenen Namespace in Temporal u
 3. Worker im laufenden Orchestrator, optional: In der `.env` `HUB_INTERNAL_URL="http://localhost:3999"`, `HUB_INTERNAL_TOKEN` (Ausgabe von `openssl rand -hex 32`) und `YSOCIAL_TEMPORAL_NAMESPACE="ysocial"` eintragen und `pnpm run dev` neu starten. Im Log steht `ysocial worker running (namespace ysocial, queue ysocial-postiz)`. Unter `localhost:3999` läuft lokal kein Hub. Ein Ping (`docker exec temporal temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialPingWorkflow --workflow-id ysocial-ping-lokal --address temporal:7233`) wiederholt deshalb die Zustellung, bis du den Workflow `ysocial-event-…` in der Temporal-UI beendest.
 
 Die Variablen und das Format der Ereignisse beschreibt `apps/orchestrator/src/ysocial/README.md`.
+
+## Payload-Codec gegen Temporal testen (ab PR 40)
+
+Ohne `.env` und ohne laufendes Postiz. Der Test nutzt nur den Namespace `ysocial-codec-it` und legt ihn selbst an, das lokale Temporal aus `docker-compose.dev.yaml` geht also auch. Ohne laufendes Temporal reicht ein Dev-Server:
+
+    docker run --rm --name ysocial-codec-it -p 127.0.0.1:7233:7233 --entrypoint temporal temporalio/auto-setup:1.28.1 server start-dev --ip 0.0.0.0 --headless
+    YSOCIAL_IT_TEMPORAL_ADDRESS=127.0.0.1:7233 corepack pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.temporal.codec.integration
+
+Erwartet: 3 Tests grün. Danach den Dev-Server mit `Ctrl+C` beenden, `--rm` entfernt den Container.
 
 ## Stoppen
 
