@@ -3,9 +3,10 @@ import { PrismaRepository } from '@gitroom/nestjs-libraries/database/prisma/pris
 
 /**
  * Fixed field lists of the read API for the hub (PLAN 3.3 PR 18). Never
- * token, refreshToken, customInstanceDetails or settings. Post text and
- * media since PR 36 (E52): the service passes on only path and type of each
- * medium, see ysocial.read.service.ts.
+ * token, refreshToken or customInstanceDetails, and settings never goes out:
+ * the post queries read it (POST_QUERY_FIELDS) only for the field plug. Post
+ * text and media since PR 36 (E52): the service passes on only path and type
+ * of each medium, see ysocial.read.service.ts.
  */
 export const CUSTOMER_FIELDS = {
   id: true,
@@ -52,6 +53,11 @@ export const POST_FIELDS = {
   updatedAt: true,
 } as const;
 
+// What the queries of posts read: POST_FIELDS and settings. settings only
+// tells YsocialReadService whether the post has a plug (field plug, PR 52 of
+// the hub, D15), it never goes out (READ_API_FORBIDDEN_FIELDS).
+export const POST_QUERY_FIELDS = { ...POST_FIELDS, settings: true } as const;
+
 export const READ_API_FORBIDDEN_FIELDS = [
   'token',
   'refreshToken',
@@ -90,7 +96,7 @@ export class YsocialReadRepository {
   getPosts(from: Date, to: Date) {
     return this._post.model.post.findMany({
       where: { deletedAt: null, publishDate: { gte: from, lt: to } },
-      select: POST_FIELDS,
+      select: POST_QUERY_FIELDS,
       orderBy: { publishDate: 'asc' },
       take: POSTS_LIMIT,
     });
@@ -99,7 +105,7 @@ export class YsocialReadRepository {
   getPost(id: string) {
     return this._post.model.post.findFirst({
       where: { id, deletedAt: null },
-      select: POST_FIELDS,
+      select: POST_QUERY_FIELDS,
     });
   }
 
@@ -108,7 +114,7 @@ export class YsocialReadRepository {
   getPostGroup(organizationId: string, group: string) {
     return this._post.model.post.findMany({
       where: { organizationId, group, deletedAt: null },
-      select: POST_FIELDS,
+      select: POST_QUERY_FIELDS,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   }
