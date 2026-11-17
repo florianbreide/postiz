@@ -660,7 +660,8 @@ describe('webhookEvents', () => {
     );
     expect(event.createdAt).toBe('2026-11-18T11:06:40.000Z');
     expect(event.sentAt).toBeNull();
-    for (const bad of [-5, NaN, Infinity, '1795000000', null, {}]) {
+    // 1e13 seconds is beyond the range of Date: null instead of a RangeError.
+    for (const bad of [-5, NaN, Infinity, 1e13, '1795000000', null, {}]) {
       const [e] = webhookEvents(
         page([feedChange({ created_time: bad })], { time: bad }),
         now

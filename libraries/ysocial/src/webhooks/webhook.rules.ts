@@ -5,8 +5,8 @@ import {
 } from '../service.token';
 
 /**
- * Meta webhooks for the inbox demo (PLAN Phase 2, video for
- * pages_manage_metadata and the webhook fields feed and comments). Pure
+ * Meta webhooks for the inbox demo (E25, video for pages_manage_metadata
+ * and the webhook fields feed and comments, Hub meta.md §6). Pure
  * functions and types: the check of the verification request and of the
  * signature, and the reduction of a notification to what the demo log may
  * hold. Receiver: apps/backend/src/ysocial/ysocial.meta.webhook.controller.ts.
@@ -135,10 +135,15 @@ const id = (value: unknown) =>
     : null;
 
 // Unix seconds as Meta sends them in entry.time and value.created_time.
-const time = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? new Date(value * 1000).toISOString()
-    : null;
+// Beyond the range of Date the value counts as invalid, toISOString would
+// throw.
+const time = (value: unknown) => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
 
 /**
  * Reduces a notification to the fields of the log. Changes without a valid
