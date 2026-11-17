@@ -13,6 +13,8 @@ import { Plug } from '@gitroom/helpers/decorators/plug.decorator';
 import { timer } from '@gitroom/helpers/utils/timer';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
 import { DashboardFunction } from '@gitroom/nestjs-libraries/integrations/dashboard.function.decorator';
+// ysocial patch 7 (YSOCIAL-PATCHES.md)
+import { ysocialLinkedinPageScopes, ysocialLinkedinUserinfo } from '../../../../ysocial/src/scopes/linkedin.scopes';
 
 @Rules(
   'LinkedIn can have maximum one attachment when selecting video, when choosing a carousel on LinkedIn minimum amount of attachment must be two, and only pictures, if uploading a video, LinkedIn can have only one attachment'
@@ -26,7 +28,9 @@ export class LinkedinPageProvider
   override isBetweenSteps = true;
   override refreshWait = true;
   override maxConcurrentJob = 2; // LinkedIn Page has professional posting limits
-  override scopes = [
+  // ysocial patch 7 (YSOCIAL-PATCHES.md): without openid and profile, with the
+  // comment scopes; the changes stand in libraries/ysocial/src/scopes/linkedin.scopes.ts
+  override scopes = ysocialLinkedinPageScopes([
     'openid',
     'profile',
     'w_member_social',
@@ -34,7 +38,7 @@ export class LinkedinPageProvider
     'rw_organization_admin',
     'w_organization_social',
     'r_organization_social',
-  ];
+  ]);
 
   override editor = 'normal' as const;
 
@@ -72,13 +76,8 @@ export class LinkedinPageProvider
       name,
       sub: id,
       picture,
-    } = await (
-      await fetch('https://api.linkedin.com/v2/userinfo', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      })
-    ).json();
+      // ysocial patch 7 (YSOCIAL-PATCHES.md): /v2/me instead of /v2/userinfo
+    } = await ysocialLinkedinUserinfo(accessToken);
 
     return {
       id,
@@ -245,13 +244,8 @@ export class LinkedinPageProvider
       name,
       sub: id,
       picture,
-    } = await (
-      await fetch('https://api.linkedin.com/v2/userinfo', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      })
-    ).json();
+      // ysocial patch 7 (YSOCIAL-PATCHES.md): /v2/me instead of /v2/userinfo
+    } = await ysocialLinkedinUserinfo(accessToken);
 
     const { vanityName } = await (
       await fetch('https://api.linkedin.com/v2/me', {

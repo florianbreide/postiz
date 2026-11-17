@@ -549,6 +549,23 @@ Quelle: Meta, „Get started with webhooks“ (Verification Requests, Validating
 - Je Ereignis ein `RPUSH`, dann `LTRIM` und `EXPIRE`, nicht in einer Transaktion. Bricht Redis dazwischen ab, bleibt die Liste bis zum nächsten Ereignis ohne Ablaufzeit. Lokal ohne `REDIS_URL` nutzt Postiz einen Ersatz ohne `LTRIM`, dort loggt jeder Empfang `store_failed`.
 - Ein Ereignis, das Meta doppelt schickt, steht doppelt im Protokoll.
 
+## LinkedIn-Seiten ohne OpenID Connect (PR 39, Patch 7)
+
+Y Social verbindet LinkedIn-Seiten mit einer eigenen App, die nur das Produkt Community Management API hat („Weg A“, Hub `docs/plattformen/linkedin.md` 1.5, E58). LinkedIn gibt dort `openid` und `profile` nicht. Postiz fragt beide an, verlangt jeden angefragten Scope nach dem Login (`checkScopes`, sonst 409 `NotEnoughScopes`) und liest das Mitglied aus `/v2/userinfo`, das beide braucht. Ohne Patch verbindet Postiz mit dieser App keine Seite.
+
+Patch 7 in `linkedin.page.provider.ts` (Provider `linkedin-page`), Logik in `libraries/ysocial/src/scopes/linkedin.scopes.ts`:
+
+| Was | Wie |
+|---|---|
+| Scopes | Die Liste von Postiz ohne `openid` und `profile` (`YSOCIAL_LINKEDIN_PAGE_DROP`), dazu `r_organization_social_feed` und `w_organization_social_feed` für Kommentare unter den Posts der Seite (`YSOCIAL_LINKEDIN_PAGE_ADD`). Angefragt werden damit `w_member_social`, `r_basicprofile`, `rw_organization_admin`, `w_organization_social`, `r_organization_social`, `r_organization_social_feed`, `w_organization_social_feed` |
+| Mitglied | `authenticate` und `refreshToken` lesen ID, Name und Bild aus `/v2/me` (`r_basicprofile`) statt aus `/v2/userinfo`, in derselben Form (`sub`, `name`, `picture`). Die ID von `/v2/me` ist die Personen-ID (`urn:li:person:<id>`) wie `sub` von OpenID Connect. Sie steht nur im Platzhalter `linkedin-page_<id>` bis zur Wahl der Seite |
+| unverändert | Wahl der Seite (`companies`, `fetchPageInformation`), Posten, Kommentare, Statistik, der Provider `linkedin` für persönliche Profile (ausgeblendet über `HIDDEN_PROVIDERS`) |
+
+Grenzen:
+- **Ungeprüft bis B6** (Florians LinkedIn-App): ob das Produkt Community Management API alle sieben Scopes erteilt, auch `w_member_social`, und ob es Refresh-Tokens gibt. Fehlt ein Scope, scheitert jedes Verbinden mit `NotEnoughScopes`. Dann die Zeile in `linkedin.scopes.ts` ändern, nicht die Postiz-Datei. Der Test belegt das Verhalten nur mit einem gemockten LinkedIn.
+- Seiten, die vorher mit einer App mit OpenID Connect verbunden wurden, behalten ihr Token. Neue Scopes tragen sie erst nach erneutem Verbinden.
+- `/v2/me` wird bei jedem Verbinden und Refresh zweimal gerufen, einmal für Name und Bild, einmal für `vanityName` wie bisher bei Postiz. Bei 100 Aufrufen je Mitglied und Tag im Development Tier fällt das nicht ins Gewicht.
+
 ## Ping von Hand (PR 16, QA 4)
 
 Im Temporal-Container von Staging oder lokal:
