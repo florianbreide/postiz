@@ -549,6 +549,25 @@ Quelle: Meta, „Get started with webhooks“ (Verification Requests, Validating
 - Je Ereignis ein `RPUSH`, dann `LTRIM` und `EXPIRE`, nicht in einer Transaktion. Bricht Redis dazwischen ab, bleibt die Liste bis zum nächsten Ereignis ohne Ablaufzeit. Lokal ohne `REDIS_URL` nutzt Postiz einen Ersatz ohne `LTRIM`, dort loggt jeder Empfang `store_failed`.
 - Ein Ereignis, das Meta doppelt schickt, steht doppelt im Protokoll.
 
+## LinkedIn-Seiten ohne OpenID Connect (PR 39, Patch 7)
+
+Y Social verbindet LinkedIn-Seiten mit einer eigenen App, die nur das Produkt Community Management API hat („Weg A“, Hub `docs/plattformen/linkedin.md` 1.5, E58). LinkedIn gibt dort `openid` und `profile` nicht. Postiz fragt beide an, verlangt jeden angefragten Scope nach dem Login (`checkScopes`, sonst 409 `NotEnoughScopes`) und liest das Mitglied aus `/v2/userinfo`, das beide braucht. Ohne Patch verbindet Postiz mit dieser App keine Seite.
+
+Patch 7 in `linkedin.page.provider.ts` (Provider `linkedin-page`), Logik in `libraries/ysocial/src/scopes/linkedin.scopes.ts`:
+
+| Was | Wie |
+|---|---|
+| Scopes | Die Liste von Postiz ohne `openid` und `profile` (`YSOCIAL_LINKEDIN_PAGE_DROP`), dazu `r_organization_social_feed` und `w_organization_social_feed` für Kommentare unter den Posts der Seite (`YSOCIAL_LINKEDIN_PAGE_ADD`). Angefragt werden damit `w_member_social`, `r_basicprofile`, `rw_organization_admin`, `w_organization_social`, `r_organization_social`, `r_organization_social_feed`, `w_organization_social_feed` |
+| Mitglied | `authenticate` und `refreshToken` lesen ID, Name und Bild aus `/v2/me` (`r_basicprofile`) statt aus `/v2/userinfo`, in derselben Form (`sub`, `name`, `picture`). Die ID von `/v2/me` ist die Personen-ID, eindeutig nur für die App (Profile API). Dass sie gleich `sub` von OpenID Connect ist, ist wahrscheinlich, aber nicht dokumentiert. Für die neue App von Y Social spielt das keine Rolle. Postiz nutzt sie für den Platzhalter `linkedin-page_<id>` und als `rootInternalId` jeder Seite, die daraus gewählt wird: Die Tokens eines Logins gehen an alle Zeilen mit diesem Wert |
+| Fehler | `authenticate` bricht ab, wenn `/v2/me` nicht mit 2xx und einer ID antwortet (fail-closed). Sonst entstünde wie bei Postiz eine Zeile `linkedin-page_undefined`, und die Tokens verschiedener Logins gingen an dieselben Seiten. Die Meldung nennt nur den Status. `refreshToken` bricht nicht ab: Postiz nutzt dort nur die Tokens, Name und Bild des Kanals bleiben |
+| unverändert | Wahl der Seite (`companies`, `fetchPageInformation`), Posten, Kommentare, Statistik, der Provider `linkedin` für persönliche Profile (ausgeblendet über `HIDDEN_PROVIDERS`) |
+
+Grenzen:
+- **Scopes laut Doku im Produkt, im Konto ungeprüft bis B6** (Florians LinkedIn-App): Microsoft Learn „Increasing Access“ nennt für Community Management API alle sieben, `openid`, `profile` und `email` nicht. Ob es Refresh-Tokens gibt, ist ungeprüft. Fehlt ein Scope, scheitert jedes Verbinden mit `NotEnoughScopes` (409). Die Ursache steht dann nur in `error_description` der Rückleitung von LinkedIn (vermutlich `unauthorized_scope_error`, ungeprüft). Dann die Zeile in `linkedin.scopes.ts` ändern, nicht die Postiz-Datei. Der Test belegt das Verhalten nur mit einem gemockten LinkedIn.
+- **Eine Änderung der Scopes entwertet Tokens:** LinkedIn macht alle früheren Zugangstokens eines Mitglieds ungültig, wenn es mit anderen Scopes neu verbindet (Authorization Code Flow). Neue Tokens gibt Postiz nur an Zeilen mit demselben `rootInternalId` weiter. Seiten aus einer anderen App (andere Client-ID) laufen bis zum Ablauf, der Refresh scheitert dann, und die Seite muss neu verbunden werden. Die Liste deshalb vor der ersten Kundenseite festlegen (Frage `w_member_social`, Hub-ROADMAP).
+- QA mit B6, vor dem ersten Verbinden: Es gibt keinen Kanal `linkedin-page` in Postiz. Beim Verbinden steht im Schritt „Seite wählen“ der volle Name des Mitglieds, nicht nur der `vanityName`. Sonst ist die Projektion von `/v2/me` gescheitert.
+- `/v2/me` wird bei jedem Verbinden und Refresh zweimal gerufen, einmal für Name und Bild, einmal für `vanityName` wie bisher bei Postiz. Bei 100 Aufrufen je Mitglied und Tag im Development Tier fällt das nicht ins Gewicht.
+
 ## Ping von Hand (PR 16, QA 4)
 
 Im Temporal-Container von Staging oder lokal:
