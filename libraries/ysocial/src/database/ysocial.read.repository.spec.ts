@@ -29,7 +29,7 @@ describe('YsocialReadRepository posts', () => {
     });
   });
 
-  it('getPostGroup is limited to the organization and the group, without deleted posts', async () => {
+  it('getPostGroup is limited to the organization and the group, without deleted posts, oldest first', async () => {
     const { repository, post } = setup();
     await repository.getPostGroup('org-1', 'g-1');
     expect(post.findMany).toHaveBeenCalledTimes(1);
@@ -40,6 +40,7 @@ describe('YsocialReadRepository posts', () => {
       deletedAt: null,
     });
     expect(args.select).toBe(POST_FIELDS);
+    expect(args.orderBy).toEqual({ createdAt: 'asc' });
   });
 
   it('getPosts keeps the date range, the deleted filter, the order and the limit', async () => {

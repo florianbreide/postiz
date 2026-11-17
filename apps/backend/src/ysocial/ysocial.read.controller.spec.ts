@@ -534,14 +534,24 @@ describe('thread order of the comments', () => {
     ).toEqual([]);
   });
 
-  it('ends with two comments on the same parent and lists no comment twice', async () => {
-    const ids = await thread([
-      postRow,
-      comment('post-2', 'post-1', 'first'),
-      comment('post-3', 'post-1', 'second'),
-      comment('post-4', 'post-3', 'third'),
-    ]);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.length).toBeGreaterThan(0);
+  // The repository sorts the group by createdAt, like childrenPost[0] in
+  // Postiz the first child counts.
+  it('follows the first of two comments on the same parent', async () => {
+    expect(
+      await thread([
+        postRow,
+        comment('post-2', 'post-1', 'first'),
+        comment('post-3', 'post-1', 'second'),
+        comment('post-4', 'post-3', 'third'),
+      ])
+    ).toEqual(['post-2']);
+    expect(
+      await thread([
+        postRow,
+        comment('post-3', 'post-1', 'second'),
+        comment('post-4', 'post-3', 'third'),
+        comment('post-2', 'post-1', 'first'),
+      ])
+    ).toEqual(['post-3', 'post-4']);
   });
 });
