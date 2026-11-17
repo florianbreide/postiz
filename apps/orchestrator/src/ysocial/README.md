@@ -384,7 +384,7 @@ Für Facebook hat die Antwort dieselbe Form mit `"provider": "facebook"`. Die Fe
 | 404 | `comment_not_found` | Kommentar steht nicht unter einem Beitrag dieses Kontos, Meta kennt ihn nicht (Code 100, Subcode 33, etwa direkt nach dem Löschen) oder die ID hat ein `_` (Instagram-IDs bestehen nur aus Ziffern). Bei Facebook: Kommentar steht nicht in der Liste der Leseroute (oben), oder die ID hat nicht die Form `<Ziffern>_<Ziffern>` |
 | 409 | `confirmation_required` | Löschen ohne Bestätigung |
 | 409 | `channel_inactive` | Kanal gelöscht, `disabled`, `refreshNeeded` oder `inBetweenSteps`, steht in `flag` |
-| 409 | `provider_not_supported` | Kanal ohne Inbox, steht in `provider`. Zurzeit `instagram` und `facebook` |
+| 409 | `provider_not_supported` | Kanal ohne Inbox, der Provider steht in `provider`. Eine Inbox gibt es zurzeit für `instagram` und `facebook` |
 | 502 | `platform_error` | Meta lehnt ab (beim Schreiben nur Antworten unter 500): `platformStatus`, `platformCode`, `platformSubcode` und `reason`, die Meldung von Meta, bereinigt wie `reason` bei Ereignissen |
 | 500 | `internal_error` | Unerwarteter Fehler, etwa Datenbank oder Entschlüsselung des Tokens. Im Log nur der Name der Fehlerklasse, bei Prisma dazu der Code (`P1001` und so weiter). Als `HttpException` geht er nicht an den Sentry-Filter von Postiz, der den Body der Anfrage (den Antworttext) mitschicken würde |
 | 503 | `platform_unavailable` | Meta beim Lesen oder bei der Prüfung vor dem Schreiben nicht erreichbar oder keine Antwort nach 15 s. Nichts geändert |
@@ -416,7 +416,7 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
 - Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
 
-**Facebook** (ab 0.9.0, PLAN Phase 2, Video für `pages_read_user_content` und `pages_manage_engagement` Welle 2): `libraries/ysocial/src/inbox/facebook.inbox.ts`. Endpunkte und Rechte laut offizieller Meta-Referenz (gelesen am 17.11.2026, Links im Kopf der Datei):
+**Facebook** (ab 0.9.0): `libraries/ysocial/src/inbox/facebook.inbox.ts`. Eine Erweiterung der Demo nach E25, kein Produktcode für Phase 3. Anlass: Florian hat am 17.11.2026 entschieden, `pages_read_user_content` und `pages_manage_metadata` in den Meta-Antrag aufzunehmen (Weg 1, postiz#25). Meta verlangt für jedes Recht ein Video, das die Nutzung in der App zeigt. Dieser Teil liefert die Facebook-Kommentare für die Videos zu `pages_read_user_content` und `pages_manage_engagement` (Welle 2, Hub `meta.md` §6). Endpunkte und Rechte laut offizieller Meta-Referenz (gelesen am 17.11.2026, Links im Kopf der Datei):
 
 | Aufruf | Rechte |
 |---|---|
@@ -429,8 +429,11 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 `pages_show_list`, `pages_read_engagement` und `pages_manage_engagement` fragt der Postiz-Provider `facebook` selbst an, `pages_read_user_content` seit Patch 4 (PR 38, E58) über `libraries/ysocial/src/scopes/meta.scopes.ts`. Was dort steht, fragt Postiz beim Verbinden an und verlangt es (`checkScopes`). Seiten, die vorher verbunden wurden, tragen neue Rechte erst nach erneutem Verbinden. Für die Facebook-Inbox braucht es keinen weiteren Patch. Wann eine Zeile in `meta.scopes.ts` wegfällt, steht in ihrem Kopf.
 
 **Grenzen und Ungeprüftes bei Facebook**
-- `message`, `from` und `created_time` am Kommentar belegt der Leitfaden „Comments and @mentions“ der Pages API. `is_hidden` nennt die aktuelle Comment-Referenz nur als Parameter zum Ändern, nicht in der Feldliste. Lehnt Meta das Feld beim Lesen ab, endet die Leseroute mit 502 `platform_error` und Code 100. **Ungeprüft**, auf Staging prüfen (PR-QA).
+- `message`, `from` und `created_time` am Kommentar belegt der Leitfaden „Comments and @mentions“ der Pages API. `is_hidden` nennt die aktuelle Comment-Referenz nur als Parameter zum Ändern, nicht in der Feldliste. Lehnt Meta das Feld beim Lesen ab, endet die Leseroute mit 502 `platform_error` und Code 100, und ebenso jede schreibende Route, weil die Prüfung vor dem Schreiben dieselbe Liste liest. Dann ändert sich nichts, aber die ganze Facebook-Demo steht. **Ungeprüft**, auf Staging als erstes prüfen, vor jedem Schreiben (PR-QA).
 - Ob verborgene Kommentare in der Liste stehen, sagt die Doku nicht. Fehlen sie, kann die Demo einen verborgenen Kommentar nicht wieder zeigen (404 `comment_not_found`, nichts geändert). **Ungeprüft**, auf Staging prüfen.
+- Antwort auf eine Antwort: Die Route lässt auch die ID einer Antwort aus der Liste zu und schickt dann `POST /{antwort-id}/comments`. Was Meta damit macht (ablehnen oder an den Kommentar darüber hängen), sagt die Referenz nicht, sie nennt nur das Feld `can_comment`. **Ungeprüft**. Die Demo-Seite im Hub bietet Aktionen nur an Kommentaren der obersten Ebene (INBOX-KONZEPT §7, Punkt 4).
+- Je Kommentar liest die Demo nur die erste Seite der Antworten in der Standardgröße von Meta. Antworten danach und Kommentare ab Platz 51 zeigt sie nicht und kann sie nicht ändern (404 `comment_not_found`).
+- Scheitert der Abruf der Kommentare eines einzigen Posts, etwa weil er gerade gelöscht wurde, scheitert die ganze Liste. Bis zum nächsten erfolgreichen Abruf sind dann auch alle schreibenden Routen des Kanals gesperrt (fail-closed).
 - Ob `from.name` bei Personen ohne Rolle in der App mit Standard Access kommt, ist **ungeprüft** (`meta.md` 4, „Business Asset User Profile Access“). Fehlt es, steht `username` auf `null`.
 - `order=reverse_chronological` steht in der Referenz als Wert von `summary.order`. Ohne Wirkung kämen die ältesten 50 Kommentare. Für die Aufnahmen mit wenigen Kommentaren spielt das keine Rolle.
 - Ohne Posttext wie bei Instagram. Den Bezug zum Post zeigt der Link `permalink`.

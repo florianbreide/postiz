@@ -7,7 +7,13 @@ import {
   InboxReply,
   YsocialInboxProvider,
 } from './inbox.rules';
-import { expectSuccess, GraphObject, metaGraph } from './meta.graph';
+import {
+  count,
+  expectSuccess,
+  GraphObject,
+  metaGraph,
+  text,
+} from './meta.graph';
 
 /**
  * Inbox for the Postiz provider "facebook" (Facebook Page, graph.facebook.com,
@@ -69,14 +75,6 @@ const isPageId = (value: unknown): value is string =>
 
 const isFacebookId = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 64 && /^\d+(_\d+)?$/.test(value);
-
-const text = (value: unknown) =>
-  typeof value === 'string' && value ? value : null;
-
-const count = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
 
 // from.name only, never the Page-scoped id of the person.
 const toReply = (row: GraphObject): InboxReply => ({

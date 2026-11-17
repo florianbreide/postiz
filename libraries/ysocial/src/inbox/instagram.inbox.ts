@@ -8,7 +8,13 @@ import {
   InboxReply,
   YsocialInboxProvider,
 } from './inbox.rules';
-import { expectSuccess, GraphObject, metaGraph } from './meta.graph';
+import {
+  count,
+  expectSuccess,
+  GraphObject,
+  metaGraph,
+  text,
+} from './meta.graph';
 
 /**
  * Inbox for the Postiz provider "instagram" (Instagram API with Facebook
@@ -68,14 +74,6 @@ const isUnknownObject = (err: unknown) =>
   err instanceof InboxPlatformError &&
   err.details.code === 100 &&
   err.details.subcode === 33;
-
-const text = (value: unknown) =>
-  typeof value === 'string' && value ? value : null;
-
-const count = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
 
 const toReply = (row: GraphObject): InboxReply => ({
   id: String(row.id),

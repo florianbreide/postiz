@@ -39,9 +39,9 @@ const CHANNEL = 'int-demo-fb-1';
 const OTHER_CHANNEL = 'int-other-fb-1';
 const PAGE = '100000000000001';
 const POST = `${PAGE}_200000000000001`;
-const FOREIGN_POST = `${PAGE}_200000000000009`;
+const EMPTY_POST = `${PAGE}_200000000000009`;
 const COMMENT = '200000000000001_300000000000001';
-const FOREIGN_COMMENT = '200000000000009_300000000000009';
+const UNLISTED_COMMENT = '200000000000009_300000000000009';
 const REPLY_ID = '300000000000001_400000000000001';
 const NEW_REPLY_ID = '300000000000001_400000000000002';
 const ACTOR = 'anna@example.com';
@@ -91,7 +91,7 @@ const graphCalls: GraphCall[] = [];
 let graphHandler: (call: GraphCall) => Response | Promise<Response>;
 
 // The platform: one own post with a comment that has a reply, and a post
-// with no comments. FOREIGN_COMMENT is listed nowhere.
+// with no comments. UNLISTED_COMMENT is listed nowhere.
 const defaultGraph = ({ method, url }: GraphCall): Response => {
   const path = url.pathname.replace(`/${META_GRAPH_API_VERSION}`, '');
   if (method === 'GET' && path === `/${PAGE}/published_posts`) {
@@ -103,7 +103,7 @@ const defaultGraph = ({ method, url }: GraphCall): Response => {
           created_time: '2026-11-01T10:00:00+0000',
           status_type: 'added_photos',
         },
-        { id: FOREIGN_POST },
+        { id: EMPTY_POST },
       ],
     });
   }
@@ -134,7 +134,7 @@ const defaultGraph = ({ method, url }: GraphCall): Response => {
       summary: { total_count: 2 },
     });
   }
-  if (method === 'GET' && path === `/${FOREIGN_POST}/comments`) {
+  if (method === 'GET' && path === `/${EMPTY_POST}/comments`) {
     return json({ data: [], summary: { total_count: 0 } });
   }
   if (
@@ -352,7 +352,7 @@ describe('/ysocial/inbox with a Facebook Page', () => {
             ],
           },
           {
-            id: FOREIGN_POST,
+            id: EMPTY_POST,
             permalink: null,
             timestamp: null,
             mediaType: null,
@@ -518,9 +518,9 @@ describe('/ysocial/inbox with a Facebook Page', () => {
   describe('comment that the list does not contain', () => {
     it('answers 404 comment_not_found on every write route and writes nothing', async () => {
       for (const res of [
-        await reply(CHANNEL, FOREIGN_COMMENT),
-        await hide(CHANNEL, FOREIGN_COMMENT),
-        await remove(CHANNEL, FOREIGN_COMMENT),
+        await reply(CHANNEL, UNLISTED_COMMENT),
+        await hide(CHANNEL, UNLISTED_COMMENT),
+        await remove(CHANNEL, UNLISTED_COMMENT),
       ]) {
         expect(res.status).toBe(404);
         expect(res.json()).toMatchObject({ code: 'comment_not_found' });
@@ -529,9 +529,9 @@ describe('/ysocial/inbox with a Facebook Page', () => {
       // The check read the list of the Page.
       expect(graphCalls.length).toBeGreaterThan(0);
       expect(logLines).toEqual([
-        `inbox reply channel=${CHANNEL} comment=${FOREIGN_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
-        `inbox hide channel=${CHANNEL} comment=${FOREIGN_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
-        `inbox delete channel=${CHANNEL} comment=${FOREIGN_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
+        `inbox reply channel=${CHANNEL} comment=${UNLISTED_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
+        `inbox hide channel=${CHANNEL} comment=${UNLISTED_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
+        `inbox delete channel=${CHANNEL} comment=${UNLISTED_COMMENT} actor=${ACTOR} result=rejected code=comment_not_found`,
       ]);
     });
 

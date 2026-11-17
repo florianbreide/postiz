@@ -16,6 +16,16 @@ const GRAPH_TIMEOUT_MS = 15_000;
 
 export type GraphObject = Record<string, any>;
 
+// A text field of a Graph answer, null when missing or empty.
+export const text = (value: unknown) =>
+  typeof value === 'string' && value ? value : null;
+
+// A count of a Graph answer, 0 when missing or not a positive number.
+export const count = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+
 export const metaGraph = async (
   method: 'GET' | 'POST' | 'DELETE',
   accessToken: string,
