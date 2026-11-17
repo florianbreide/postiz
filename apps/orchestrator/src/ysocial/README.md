@@ -85,6 +85,7 @@ Arten in diesem Stand:
 | `channel.removed` | `channel` | Ein gemeldeter Kanal wurde in Postiz entfernt | `channel.removed:<integrationId>:<updatedAt beim Melden>` |
 | `channel.token_expiring` | `channel` | `DailyHealth`: Der Zugang läuft in höchstens 7 Tagen ab oder ist abgelaufen. `data.expiresAt`, `data.expired` | `channel.token_expiring:<integrationId>:<Ablauf in ms>` |
 | `health.daily` | `system` (`postiz`) | Sammelereignis von `DailyHealth`, Inhalt unten | `health.daily:postiz:<Tag in Berlin>` |
+| `channel.data_deleted` | `channel` | Ab 0.9.5: Der Löschjob hat die Tokens eines getrennten Kanals geleert. Kein Alarm, ein Eintrag fürs Protokoll. Inhalt unter „Löschjob für getrennte Kanäle“ | `channel.data_deleted:<integrationId>:<deletedAt in ms>` |
 
 `post.verified`, `post.unverifiable` und `post.resolved` schließen offene Alarme desselben Posts, `channel.reconnected` und `channel.removed` die des Kanals. Meldet derselbe Prüflauf eine Art ein zweites Mal, hängt an der Kennung `-2`, `-3` und so weiter, außer bei `post.failed`. Bei Post-Ereignissen steht in `data` immer `publishDate` und `state`.
 
@@ -568,6 +569,119 @@ Grenzen:
 - QA mit B6, vor dem ersten Verbinden: Es gibt keinen Kanal `linkedin-page` in Postiz. Beim Verbinden steht im Schritt „Seite wählen“ der volle Name des Mitglieds, nicht nur der `vanityName`. Sonst ist die Projektion von `/v2/me` gescheitert.
 - `/v2/me` wird bei jedem Verbinden und Refresh zweimal gerufen, einmal für Name und Bild, einmal für `vanityName` wie bisher bei Postiz. Bei 100 Aufrufen je Mitglied und Tag im Development Tier fällt das nicht ins Gewicht.
 
+## Löschjob für getrennte Kanäle (ab 0.9.5, Datenschutz D1)
+
+Postiz setzt beim Löschen eines Kanals nur `deletedAt` und markiert seine Posts als gelöscht. Das Token bleibt in der Datenbank und bei der Plattform gültig, die Medien der Posts bleiben im Speicher (Hub `docs/rechtliches/datenschutz-entwurf.md`, Teil D, Punkt 1). Der Löschjob holt das nach. Logik in `libraries/ysocial/src/deletion/`, Datenbank in `libraries/ysocial/src/database/ysocial.deletion.repository.ts`.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_DELETION_ENABLED` | `true` schaltet das Löschen ein: Tokens leeren, Medien löschen, Ereignis. Jeder andere Wert und eine fehlende Variable: Trockenlauf |
+| `YSOCIAL_DELETION_REVOKE` | `true` schaltet zusätzlich den Widerruf bei der Plattform ein (zurzeit nur TikTok). Ohne den Wert: kein Plattformaufruf, `revoke_off`. Nur in einer Umgebung setzen, siehe „Einschalten“ |
+
+**Ablauf.** Der Schedule `ysocial-channel-deletion` startet jede Stunde um Viertel vor `ysocialChannelDeletionWorkflow`. `ysocialFindChannelsForDeletion` liest die Kanäle, deren `deletedAt` 6 Tage oder länger zurückliegt und die noch ein Token tragen, die ältesten zuerst, höchstens 25 je Lauf. Für jeden ruft der Workflow `ysocialDeleteChannelData` auf, einen Kanal nach dem anderen. Scheitert einer, macht er mit dem nächsten weiter, und der nächste Lauf versucht ihn wieder.
+
+Je Kanal:
+1. **Widerruf** bei der Plattform, nur mit `YSOCIAL_DELETION_REVOKE=true`, nur wo das sicher geht (Tabelle unten) und nur, wenn kein anderer Kanal denselben Zugang nutzt.
+2. **Medien** der Posts dieses Kanals, die nichts anderes nutzt: erst die Dateien, dann die Zeilen in `Media`.
+3. **Tokens leeren:** `token` wird `''` (in Postiz ein Pflichtfeld), `refreshToken` wird `null`. Nur, wenn `deletedAt` und `updatedAt` noch die Werte haben, die der Job gelesen hat.
+4. Ereignis `channel.data_deleted` an den Hub.
+
+**Schonfrist und Frist**
+- 6 Tage Schonfrist nach `deletedAt`, weil Admins Kanäle versehentlich löschen. Was beim Wiederverbinden geschieht, hängt vom Provider ab (`integration.repository.ts`):
+  - Ohne Seitenauswahl, etwa TikTok: Postiz findet dieselbe Zeile über `organizationId` und `internalId` und setzt `deletedAt` auf `null` (`createOrUpdateIntegration`). Der Job sieht den Kanal dann nicht mehr. Wird er während eines Laufs verbunden, ändert sich `updatedAt`, und der Job lässt ihn in diesem Lauf in Ruhe (`skipped`).
+  - Mit Seitenauswahl (Facebook, Instagram, YouTube, Business Profile, LinkedIn-Seiten): Postiz gibt der gelöschten Zeile eine zufällige `internalId` (`checkForDeletedOnceAndUpdate`) und verbindet die Seite in einer neuen Zeile. Die alte bleibt gelöscht, ihre Posts auch. Der Job fasst die neue Zeile nie an. Die alte bearbeitet er nach ihrer Schonfrist: Er leert die alten Tokens und löscht die Medien der alten, gelöschten Posts, wenn kein anderer Post sie nutzt. Widerrufen wird bei diesen Plattformen nicht (unten).
+- Die Frist ist 7 Tage nach `deletedAt`, im Code 2 Stunden früher, weil die Läufe stündlich kommen und auf ältere Kanäle warten können. YouTube verlangt die Löschung binnen 7 Tagen, nachdem der Zugang über unser eigenes Werkzeug beendet wurde (YouTube API Services Developer Policies III.D.2.3, III.E.4). Deshalb 6 und nicht 7 Tage Schonfrist: Die stündlichen Läufe des letzten Tages sind die Wiederholungen. Bis zur Frist versucht es jeder Lauf wieder, wenn der Widerruf keine klare Antwort bekam (`failed`), die Zugangsdaten der Plattform fehlen (`not_configured`), Medien nicht gelöscht wurden oder der Job selbst scheiterte, etwa an der Datenbank. Ab der Frist leert er die Tokens trotzdem. Das Ereignis sagt dann, was offen blieb (`overdue: true`).
+- LinkedIn verlangt für die Daten eines Kunden höchstens 10 Tage, das passt. „Sofort“ auf Wunsch eines Mitglieds (API Terms of Use §4.4) leistet der Job nicht, das bleibt ein Schritt von Hand.
+- Beim ersten Lauf nach dem Einschalten sind alle früher gelöschten Kanäle schon über der Frist. Sie bekommen einen Versuch, danach sind die Tokens leer.
+
+**Widerruf je Plattform** laut offizieller Doku, gelesen am 17.11.2026, Links im Kopf von `libraries/ysocial/src/deletion/platform.revoke.ts`:
+
+| Provider | Widerruf | Begründung |
+|---|---|---|
+| `tiktok` | Refresh `POST /v2/oauth/token/`, dann `POST /v2/oauth/revoke/` mit `client_key`, `client_secret` und `token` als Formular | TikTok verlangt ihn: „When the user disconnects your app, your server revokes the access token.“ Der Revoke „disconnects your app from the user's TikTok account“ und nimmt nur ein Zugangstoken („The user access token to revoke“). Das lebt 24 Stunden und ist nach der Schonfrist abgelaufen, deshalb vorher ein Refresh wie in `tiktok.provider.ts`. Der Job widerruft nur, wenn `open_id` aus dem Refresh zum Kanal passt. Ohne `refreshToken` widerruft er nicht (`no_refresh_token`) |
+| `facebook`, `instagram` | keiner | Meta dokumentiert `DELETE /{user-id}/permissions`, das „completely de-authorize[s] an app“: „any user access token for the person will be invalidated“. Das beendet den Zugang der Person für alle Seiten, die sie verbunden hat. Welche das sind, sagt Postiz nicht sicher, siehe unten |
+| `youtube`, `gmb` | keiner | Google dokumentiert `POST https://oauth2.googleapis.com/revoke`: „Revocation removes all OAuth 2.0 scopes previously granted to a project“, also alle YouTube- und Business-Profile-Kanäle der Person, dazu „Mit Google anmelden“ in Postiz, das denselben Client nutzt. Gleicher Grund wie bei Meta |
+| alle anderen | keiner | LinkedIn: Microsoft Learn dokumentiert keinen Revoke, nur `introspectToken`. Instagram Login (`instagram-standalone`): „Business Login for Instagram“ nennt keinen |
+
+Warum nicht bei Meta und Google: „Kanal neu verbinden“ in Postiz (`reConnect`, `no.auth.integrations.controller.ts`) schreibt die Tokens der Person, die klickt, in die Zeile, lässt aber `rootInternalId` auf der Person, die zuerst verbunden hat (`createOrUpdateIntegration`, Zweig `update`). Bei Meta geschieht das etwa alle 59 Tage, denn Postiz kann Meta-Tokens nicht erneuern. Die Datenbank sagt also nicht sicher, an wessen Zugang ein verbundener Kanal hängt, und ein Widerruf könnte ihn beenden (Review D1, Befund B1). Möglich wäre später, den Besitzer jedes Tokens der verbundenen Kanäle bei der Plattform zu erfragen (Meta `debug_token`, Google `tokeninfo`). Das ist nicht gebaut. Bei TikTok besteht das Problem nicht: `internalId` ist die `open_id` des Kontos, aus dessen Login die Tokens stammen.
+
+**Kein Widerruf, wenn ein anderer Kanal den Zugang teilt.** Ein TikTok-Revoke beendet die Verbindung des ganzen Kontos. Vor dem Widerruf sucht der Job deshalb in allen Organisationen nach anderen Kanälen derselben Familie (`PLATFORM_REVOKERS`, zurzeit nur `tiktok`), die verbunden sind oder noch in ihrer Schonfrist stehen und
+- denselben `rootInternalId` oder `internalId` haben, auch in der Form `deleted_<id>_<10 Zeichen>`, die Postiz beim Ersetzen einer Zeile nach der Seitenauswahl vergibt, oder
+- keinen `rootInternalId` haben. Dann ist unklar, wem der Zugang gehört.
+
+Findet er einen, widerruft er nicht (`shared_grant` oder `grant_unknown`) und leert nur die Tokens dieses Kanals. Hat der Kanal selbst keinen `rootInternalId`, ebenso `grant_unknown`. Direkt vor dem Revoke prüft er beides noch einmal, und dass der Kanal unverändert gelöscht ist. Danach prüft er es ein drittes Mal. Hat sich in den Millisekunden dazwischen etwas geändert, steht im Log eine Warnung, den Kanal neu zu verbinden.
+
+**Ergebnis des Widerrufs**, `revoke` in Log und Ereignis:
+
+| Wert | Bedeutung | Tokens |
+|---|---|---|
+| `revoked` | Die Plattform hat bestätigt | geleert |
+| `already_invalid` | TikTok antwortet beim Refresh `invalid_grant`: „refresh token is invalid, expired, revoked“ | geleert |
+| `no_refresh_token` | TikTok: kein Refresh-Token gespeichert, das Zugangstoken ist abgelaufen | geleert, kein Widerruf |
+| `token_mismatch` | `open_id` aus dem Refresh passt nicht zu `internalId` oder `rootInternalId` | geleert, kein Widerruf |
+| `not_supported` | Kein Widerruf bei dieser Plattform (Tabelle oben) | geleert |
+| `revoke_off` | `YSOCIAL_DELETION_REVOKE` ist nicht `true` | geleert, kein Widerruf |
+| `shared_grant`, `grant_unknown` | siehe oben | geleert, kein Widerruf |
+| `failed` | Keine klare Antwort: Netzfehler, 15 s ohne Antwort, 5xx, unerwarteter Body, oder ein Fehler des Jobs | bis zur Frist behalten, dann geleert |
+| `not_configured` | `TIKTOK_CLIENT_ID` oder `TIKTOK_CLIENT_SECRET` fehlt | wie `failed` |
+| `changed_meanwhile` | Der Kanal hat sich während des Laufs geändert, etwa weil er wieder verbunden wurde | unberührt |
+
+**Medien.** Der Job sammelt aus `image` und `settings` aller Posts des Kanals, auch der gelöschten, jedes Objekt mit `id` und `path` und sucht die Medien in `Media` derselben Organisation. Er löscht ein Medium nur, wenn
+- `path` und `thumbnail` im eigenen Speicher liegen: `FRONTEND_URL/uploads/` oder bei `STORAGE_PROVIDER=cloudflare` `CLOUDFLARE_BUCKET_URL/` ohne weiteren Ordner (Postiz legt dort alles in die oberste Ebene, und `removeFile` nimmt nur den letzten Pfadteil). Fehlt die Variable, löscht er keine Datei,
+- es kein Profilbild, kein Agentur-Logo und kein Bild einer OAuth-App ist,
+- keine andere Zeile in `Media` dieselbe Datei nennt,
+- kein Post, der nicht gelöscht ist, die ID, den Pfad oder das Vorschaubild in `image`, `settings` oder `content` enthält, in keinem Kanal und keiner Organisation,
+- kein Set, keine Signatur, die nicht gelöscht ist, und kein Clip es nennt.
+
+Dann löscht er die Dateien über den Speicher von Postiz (`UploadFactory`, `removeFile`) und danach die Zeile in `Media`. Eine Datei, die es schon nicht mehr gibt, zählt als gelöscht. Scheitert eine Datei, bleibt die Zeile für den nächsten Lauf. Je Kanal und Lauf prüft er Medien höchstens 7 Minuten lang, denn die Aktivität hat 10 Minuten. Die übrigen (`left`) kommen im nächsten Lauf dran, bis zur Frist.
+
+**Wirkung auf die Mediathek:** Jede Datei, die im Editor hochgeladen wird, steht als Zeile in `Media` in der Mediathek der Organisation. Ein Bild, das nur in Posts des getrennten Kanals stand, verschwindet also nach der Schonfrist auch aus der Mediathek, obwohl die Organisation weiterlebt. So verlangt es der Auftrag: Medien der Posts des Kanals, wenn kein anderer Post sie nutzt. Bilder, die noch in keinem Post stehen, fasst der Job nicht an.
+
+**Trockenlauf** (ohne `YSOCIAL_DELETION_ENABLED=true`): Er liest wie oben, auch die Prüfung auf geteilte Zugänge und die Medien, aber ohne Plattformaufruf, ohne Schreiben und ohne Ereignis. `revoke` nennt den Plan (`revoke`, `not_supported`, `revoke_off`, `shared_grant`, `grant_unknown`), `media.deleted` die Medien, die er löschen würde. Die Prüfung der Medien läuft dabei jede Stunde für bis zu 25 Kanäle, je Medium eine Suche über die Posts.
+
+**Log**, nie ein Token und nie Antworttexte der Plattform:
+- je Lauf mit fälligen Kanälen `channel deletion: due=<n> mode=<dry-run|on>`
+- je Kanal `channel deletion channel=<id> provider=<id> mode=<dry-run|on> status=<deleted|retry|planned|skipped> revoke=<Wert> media deleted=<n> kept=<n> failed=<n> left=<n>`, nach der Frist mit `overdue`
+- je Widerruf `provider call revoke provider=<id> channel=<id> result=<Wert>`
+- Warnungen: `channel deletion media=<id> failed: <Fehlerklasse>`, `channel deletion channel=<id> failed: <Fehlerklasse>` (Fehler des Jobs, nach der Frist werden die Tokens trotzdem geleert) und `channel deletion channel=<id> revoked, but the account was connected meanwhile: connect it again`
+
+**Ereignis** `channel.data_deleted`, nur wenn die Tokens geleert sind:
+
+    {
+      "id": "channel.data_deleted:<integrationId>:<deletedAt in ms>",
+      "kind": "channel.data_deleted",
+      "subject": { "type": "channel", "id": "<integrationId>" },
+      "postiz": { "organizationId": "…", "integrationId": "…", "customerId": "…", "providerIdentifier": "tiktok" },
+      "reason": "Getrennter Kanal gelöscht: Zugang bei der Plattform widerrufen, Tokens geleert, 3 Medien gelöscht.",
+      "data": { "deletedAt": "…", "revoke": "revoked", "mediaDeleted": 3, "mediaKept": 0, "mediaFailed": 0, "mediaLeft": 0, "overdue": false }
+    }
+
+Bis der Hub die Art kennt, antwortet er mit 422, und die Zustellung endet ohne Wiederholung (oben).
+
+Ergebnis des Workflows: `{"dryRun":…,"due":…,"deleted":…,"planned":…,"retry":…,"skipped":…,"failed":…,"eventsFailed":…}`. `eventsFailed` zählt Kanäle mit geleerten Tokens, deren Ereignis nicht an seine Zustellung ging. Lauf von Hand, nicht während des geplanten Laufs um Viertel vor:
+
+    temporal workflow start --namespace ysocial --task-queue ysocial-postiz --type ysocialChannelDeletionWorkflow --workflow-id ysocial-channel-deletion-hand-$(date +%Y%m%d-%H%M)
+
+**Einschalten**
+1. Der Hub kennt `channel.data_deleted` (Hub-PR).
+2. Trockenlauf ansehen: im Log `channel deletion … mode=dry-run`, je Kanal den Plan prüfen.
+3. `YSOCIAL_DELETION_ENABLED=true` im Orchestrator setzen und ihn neu starten. Das geht auch auf Staging: ohne `YSOCIAL_DELETION_REVOKE` ruft der Job keine Plattform auf.
+4. `YSOCIAL_DELETION_REVOKE=true` nur in einer Umgebung, solange Staging und Prod dieselbe TikTok-App nutzen. Der Job sieht nur die Datenbank seiner Umgebung. Ein Revoke auf Staging beendet auch die Verbindung desselben TikTok-Kontos auf Prod und umgekehrt (Hub `tiktok.md`: ob die Sandbox eigene Schlüssel hat, ist ungeprüft).
+
+**Grenzen**
+- Bei Meta und Google bleibt der Zugang bei der Plattform bestehen, nur unsere Kopie der Tokens ist gelöscht. Die Plattformen verlangen das Löschen der Daten, den Widerruf verlangt nur TikTok. Die Seite zur Datenlöschung im Hub sagt bereits: „Den Zugriff bei der Plattform beenden Sie sicher selbst in deren Einstellungen.“
+- Die Zeile in `Integration` bleibt mit Name, Bild, `internalId` und `rootInternalId`, ebenso die gelöschten Posts. Das Profilbild in `/uploads` (Feld `picture`) löscht der Job nicht (Teil D, Punkt 1, offen).
+- Der Job nutzt die Tokens als Merker: Sind sie leer, schaut er den Kanal nicht mehr an. Medien, die bis zur Frist nicht gelöscht wurden, bleiben, das Ereignis nennt ihre Zahl (`mediaFailed`, `mediaLeft`).
+- Ein Token, das sich nicht entschlüsseln lässt, zählt als vorhanden. Bei TikTok mit eingeschaltetem Widerruf gibt es dann keinen Revoke (`failed`), und die Tokens werden ab der Frist geleert. Bei allen anderen ist der Plan ohnehin final, sie werden im ersten Lauf nach der Schonfrist geleert. Ins Log kommt dabei nichts vom Wert.
+- Scheitert die Aktivität nach dem Leeren und wird wiederholt, findet der zweite Versuch den Kanal leer und meldet nichts. Das Ereignis fehlt dann.
+- Schreibt Postiz später wieder ein Token in einen gelöschten Kanal, leert der Job es im nächsten Lauf. Bei LinkedIn bekommen beim Verbinden alle Zeilen mit demselben `rootInternalId` das neue Token, auch gelöschte. Das Ereignis hat dieselbe Kennung, der Hub zählt es einmal.
+- Kanäle aus „Konto löschen“ von Postiz tragen md5-Werte statt Tokens (`deleteIntegrationsForAccount`). TikTok lehnt sie beim Refresh ab oder antwortet unklar, nach der Frist sind sie geleert.
+- TikTok gibt beim Refresh vielleicht ein neues Refresh-Token. Scheitert der Revoke direkt danach, kennt der nächste Versuch nur das alte. Nimmt TikTok es nicht mehr an, steht dort `already_invalid`, obwohl die Verbindung besteht, bis das neue Token abläuft. **Ungeprüft**.
+- Rennen, sehr kurz: Nutzt jemand ein Medium genau zwischen der Prüfung und dem Löschen der Datei, etwa als Profilbild oder in einem neuen Post, ist die Datei weg. Verbindet jemand das TikTok-Konto genau zwischen der letzten Prüfung und dem Revoke, ist das neue Token tot. Das Log warnt dann.
+- Medien, die nur in einem Kommentar des Postiz-Editors, in Nachrichten, Benachrichtigungen, Plugs, einer Autopost-Vorlage oder im Speicher des KI-Agenten von Postiz stehen, prüft der Job nicht.
+- Last: Je Medium eine Suche mit `contains` über die Posts. Beim ersten Lauf nach dem Einschalten sind viele Kanäle fällig. `getDeletedChannels` liest jede Stunde alle gelöschten Kanäle mit ihren Tokens.
+- Der Verlauf von Temporal im Postiz-Namespace kann die alte Kanal-Zeile mit Token noch tragen, etwa `refreshTokenWorkflow` (siehe „Verschlüsselte Temporal-Payloads“).
+
 ## Ping von Hand (PR 16, QA 4)
 
 Im Temporal-Container von Staging oder lokal:
@@ -581,7 +695,7 @@ Ergebnis: `{"eventId":"ping:ysocial-worker:ysocial-ping-qa","delivery":"started"
 - Postiz-Workflows nie ändern, sondern versionieren.
 - Aktivitäten werden nach Methodennamen registriert. Eigene Aktivitäten tragen das Präfix `ysocial`. `YsocialActivities` hat bewusst keinen `@Activity`-Dekorator, sonst würde `nestjs-temporal-core` sie auch auf den Postiz-Workern registrieren.
 - ysocial-Workflows setzen kein Suchattribut, nie `postId`. Postiz beendet sonst beim Umplanen und Löschen fremde Workflows (E13). Ein Test prüft jede Quelldatei.
-- Nur lesende Plattformaufrufe. Gesendet wird nur an den Hub.
+- Nur lesende Plattformaufrufe. Gesendet wird nur an den Hub. Einzige Ausnahme ist der Löschjob: Er widerruft die Verbindung getrennter TikTok-Kanäle, nur mit `YSOCIAL_DELETION_ENABLED=true` und `YSOCIAL_DELETION_REVOKE=true`.
 - Gemeinsamer Code liegt in `libraries/ysocial/` und wird mit relativen Pfaden importiert.
 
 ## Tests

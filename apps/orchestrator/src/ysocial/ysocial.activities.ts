@@ -28,6 +28,11 @@ import {
   YsocialTokenMigrationService,
 } from '../../../../libraries/ysocial/src/tokens/ysocial.token.migration.service';
 import { YsocialTokenKeyError } from '../../../../libraries/ysocial/src/tokens/token.crypto';
+import {
+  ChannelDeletionDue,
+  YsocialChannelDeletionService,
+} from '../../../../libraries/ysocial/src/deletion/ysocial.channel.deletion.service';
+import { ChannelDeletionResult } from '../../../../libraries/ysocial/src/deletion/deletion.rules';
 import { YsocialTemporalClient } from './ysocial.temporal.client';
 
 export const verifyPostWorkflowId = (postId: string) =>
@@ -65,7 +70,8 @@ export class YsocialActivities {
     private _verification: YsocialPostVerificationService,
     private _temporal: YsocialTemporalClient,
     private _channelHealth: YsocialChannelHealthService,
-    private _tokenMigration: YsocialTokenMigrationService
+    private _tokenMigration: YsocialTokenMigrationService,
+    private _channelDeletion: YsocialChannelDeletionService
   ) {}
 
   async ysocialDeliverEvent(
@@ -205,6 +211,23 @@ export class YsocialActivities {
       }
       throw err;
     }
+  }
+
+  // Deletion of disconnected channels (Datenschutz D1): the channels past
+  // their grace period that still hold a token. Ids and counts only.
+  async ysocialFindChannelsForDeletion(
+    _input?: Record<string, never>
+  ): Promise<ChannelDeletionDue> {
+    return this._channelDeletion.findDue();
+  }
+
+  // One channel: revoke, media, clear the tokens. Without
+  // YSOCIAL_DELETION_ENABLED=true a dry run. The result holds ids and counts,
+  // never a token.
+  async ysocialDeleteChannelData(input: {
+    integrationId: string;
+  }): Promise<{ result: ChannelDeletionResult | null; event?: HubEvent }> {
+    return this._channelDeletion.deleteChannelData(input.integrationId);
   }
 }
 

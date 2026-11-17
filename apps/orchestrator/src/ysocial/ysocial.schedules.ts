@@ -81,6 +81,26 @@ export const ysocialSchedules = (taskQueue: string): YsocialSchedule[] => [
       catchupWindow: '2 hours',
     },
   },
+  {
+    // Datenschutz D1: deletion of disconnected channels, hourly at a quarter
+    // to, away from the channel check. A dry run until
+    // YSOCIAL_DELETION_ENABLED=true. Hourly so the last day before the
+    // deadline of 7 days has enough retries.
+    scheduleId: 'ysocial-channel-deletion',
+    spec: { intervals: [{ every: '1 hour', offset: '45 minutes' }] },
+    action: {
+      type: 'startWorkflow',
+      workflowType: 'ysocialChannelDeletionWorkflow',
+      workflowId: 'ysocial-channel-deletion',
+      taskQueue,
+      args: [],
+      workflowExecutionTimeout: '50 minutes',
+    },
+    policies: {
+      overlap: ScheduleOverlapPolicy.SKIP,
+      catchupWindow: '10 minutes',
+    },
+  },
 ];
 
 export const ensureYsocialSchedules = async (
