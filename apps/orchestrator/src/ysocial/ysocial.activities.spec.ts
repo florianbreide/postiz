@@ -1,3 +1,9 @@
+// The deletion service imports the storage factory, which loads ESM-only
+// packages (file-type). The tests never touch the storage.
+jest.mock('@gitroom/nestjs-libraries/upload/upload.factory', () => ({
+  UploadFactory: { createStorage: jest.fn() },
+}));
+
 // The real IntegrationManager loads every provider, some of them ESM-only.
 jest.mock('@gitroom/nestjs-libraries/integrations/integration.manager', () => ({
   IntegrationManager: class IntegrationManager {},
@@ -62,6 +68,7 @@ describe('ysocial activities', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
       {} as any
     );
     const activities = buildYsocialActivities(instance);
@@ -119,6 +126,7 @@ describe('ysocialDeliverEvent', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
       {} as any
     ).ysocialDeliverEvent(event);
 
@@ -173,6 +181,7 @@ describe('ysocialStartPostVerifications', () => {
     const activities = new YsocialActivities(
       verification as any,
       temporal as any,
+      {} as any,
       {} as any,
       {} as any
     );
@@ -251,6 +260,7 @@ describe('channel checks', () => {
       {} as any,
       {} as any,
       channelHealth as any,
+      {} as any,
       {} as any
     );
     expect(await activities.ysocialCheckChannels({})).toEqual({
@@ -281,6 +291,7 @@ describe('DailyHealth that saves after the events', () => {
       {} as any,
       {} as any,
       channelHealth as any,
+      {} as any,
       {} as any
     );
     expect(await activities.ysocialPrepareDailyHealth({})).toBe(prepared);
@@ -303,7 +314,13 @@ describe('DailyHealth that saves after the events', () => {
 
 describe('ysocialMigrateTokens', () => {
   const build = (migrate: jest.Mock) =>
-    new YsocialActivities({} as any, {} as any, {} as any, { migrate } as any);
+    new YsocialActivities(
+      {} as any,
+      {} as any,
+      {} as any,
+      { migrate } as any,
+      {} as any
+    );
   const counts = { encrypted: 2, changedMeanwhile: 0, remaining: 0 };
 
   it('hands the batch size to the service and returns its counts', async () => {
@@ -337,5 +354,54 @@ describe('ysocialMigrateTokens', () => {
       .ysocialMigrateTokens({})
       .catch((err) => err);
     expect(error).toBe(boom);
+  });
+});
+
+describe('channel deletion activities', () => {
+  const build = (channelDeletion: Record<string, jest.Mock>) =>
+    new YsocialActivities(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      channelDeletion as any
+    );
+
+  it('are registered with ysocial names', () => {
+    expect(ysocialActivityNames()).toEqual(
+      expect.arrayContaining([
+        'ysocialFindChannelsForDeletion',
+        'ysocialDeleteChannelData',
+      ])
+    );
+  });
+
+  it('ysocialFindChannelsForDeletion returns what the service finds', async () => {
+    const due = { dryRun: true, due: 1, integrationIds: ['int-1'] };
+    const findDue = jest.fn().mockResolvedValue(due);
+    const activities = build({ findDue });
+    expect(await activities.ysocialFindChannelsForDeletion({})).toBe(due);
+    expect(await activities.ysocialFindChannelsForDeletion()).toBe(due);
+    expect(findDue).toHaveBeenCalledWith();
+  });
+
+  it('ysocialDeleteChannelData hands the id to the service and returns its answer', async () => {
+    const answer = { result: null as null };
+    const deleteChannelData = jest.fn().mockResolvedValue(answer);
+    const activities = build({ deleteChannelData });
+    expect(
+      await activities.ysocialDeleteChannelData({ integrationId: 'int-1' })
+    ).toBe(answer);
+    expect(deleteChannelData).toHaveBeenCalledTimes(1);
+    expect(deleteChannelData).toHaveBeenCalledWith('int-1');
+  });
+
+  it('passes errors of the service on', async () => {
+    const deleteChannelData = jest.fn().mockRejectedValue(new Error('db down'));
+    await expect(
+      build({ deleteChannelData }).ysocialDeleteChannelData({
+        integrationId: 'int-1',
+      })
+    ).rejects.toThrow('db down');
   });
 });

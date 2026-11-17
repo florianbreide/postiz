@@ -45,6 +45,25 @@ describe('ysocial schedules', () => {
     });
   });
 
+  it('deletes disconnected channels every hour at 45 minutes past, never overlapping', () => {
+    const deletion = schedules.find(
+      (s) => s.scheduleId === 'ysocial-channel-deletion'
+    )!;
+    expect(deletion.spec).toEqual({
+      intervals: [{ every: '1 hour', offset: '45 minutes' }],
+    });
+    expect(deletion.action).toMatchObject({
+      type: 'startWorkflow',
+      workflowType: 'ysocialChannelDeletionWorkflow',
+      workflowId: 'ysocial-channel-deletion',
+      taskQueue: 'ysocial-postiz',
+      args: [],
+    });
+    expect(deletion.policies).toMatchObject({ overlap: 'SKIP' });
+    expect(Object.keys(deletion.action)).not.toContain('searchAttributes');
+    expect(Object.keys(deletion.action)).not.toContain('typedSearchAttributes');
+  });
+
   it('all start ysocial workflows, never with search attributes', () => {
     for (const schedule of schedules) {
       expect(schedule.scheduleId).toMatch(/^ysocial-/);

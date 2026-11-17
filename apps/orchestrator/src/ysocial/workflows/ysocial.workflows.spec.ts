@@ -84,6 +84,7 @@ describe('ysocial workflows', () => {
         'ysocialDailyHealthWorkflow',
         'ysocialDailyHealthWorkflowV101',
         'ysocialTokenMigrationWorkflow',
+        'ysocialChannelDeletionWorkflow',
       ])
     );
     const postiz = postizWorkflowNames();
