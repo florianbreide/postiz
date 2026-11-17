@@ -23,6 +23,8 @@ import { hasExtension } from '@gitroom/helpers/utils/has.extension';
 import { timer } from '@gitroom/helpers/utils/timer';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
 import { DashboardFunction } from '@gitroom/nestjs-libraries/integrations/dashboard.function.decorator';
+// ysocial patch 4 (YSOCIAL-PATCHES.md)
+import { YSOCIAL_META_SCOPES } from '../../../../ysocial/src/scopes/meta.scopes';
 
 export const META_GRAPH_API_VERSION = 'v25.0';
 
@@ -40,6 +42,8 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     'pages_manage_engagement',
     'pages_read_engagement',
     'read_insights',
+    // ysocial patch 4 (YSOCIAL-PATCHES.md): inbox scopes
+    ...YSOCIAL_META_SCOPES,
   ];
   override maxConcurrentJob = 500; // Facebook has reasonable rate limits
   editor = 'normal' as const;
