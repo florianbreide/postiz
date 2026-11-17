@@ -15,7 +15,7 @@ Vorgabe: Übergabe §5, §7.1 und §11 im Hub-Repo, lokal `../social-hub/docs/HA
 | `ysocial.activities.ts` | Aktivitäten, alle mit Präfix `ysocial` |
 | `workflows/` | Workflows des Workers, alle mit Präfix `ysocial` |
 
-Außerdem hängt `YsocialTokenKeyCheck` (aus `libraries/ysocial/src/tokens/`) im Modul, siehe „Verschlüsselte Kanal-Tokens“ unten.
+Außerdem hängt `YsocialTokenKeyCheck` (aus `libraries/ysocial/src/tokens/`) im Modul, siehe „Verschlüsselte Kanal-Tokens“ unten. Der Payload-Codec für Temporal hängt nicht hier, sondern über Patch 6 im TemporalModule von Postiz, siehe „Verschlüsselte Temporal-Payloads“.
 
 - Namespace aus `YSOCIAL_TEMPORAL_NAMESPACE` (auf Staging und Prod `ysocial`), Task-Queue `ysocial-postiz`. Der Hub-Worker nutzt im selben Namespace die Queue `ysocial-hub`.
 - Höchstens 5 Aktivitäten gleichzeitig.
@@ -34,7 +34,7 @@ Der Worker startet nur, wenn alle drei Variablen gesetzt sind (fail-closed):
 
 `YSOCIAL_WORKER_ENABLED=false` schaltet ihn ab, auch wenn alles gesetzt ist.
 
-Fehlt etwas, startet Postiz normal. Im Log steht einmal `ysocial worker off:` mit den fehlenden Namen, nie mit Werten. Schlägt der Start fehl oder bricht der Worker ab, startet er nach 30 s neu, danach mit doppelter Pause bis höchstens 10 Minuten. Ein Fehler des ysocial-Workers beendet nie den Orchestrator. Die einzige Ausnahme ist die Startprüfung des Token-Schlüssels (unten).
+Fehlt etwas, startet Postiz normal. Im Log steht einmal `ysocial worker off:` mit den fehlenden Namen, nie mit Werten. Schlägt der Start fehl oder bricht der Worker ab, startet er nach 30 s neu, danach mit doppelter Pause bis höchstens 10 Minuten. Ein Fehler des ysocial-Workers beendet nie den Orchestrator. Die einzigen Ausnahmen sind die Startprüfungen des Token-Schlüssels und des Temporal-Schlüssels (unten).
 
 ## Zustand
 
@@ -203,9 +203,63 @@ Läuft alles, steht im Log `token encryption on (key <kid>)`, ohne Schlüssel `t
 Ergebnis, nur Zahlen: `{"token":{"encrypted":…,"changedMeanwhile":…,"remaining":0},"refreshToken":{…}}`. `changedMeanwhile` zählt Tokens, die Postiz während des Laufs selbst neu geschrieben hat (Refresh), die sind schon verschlüsselt. Erfasst werden alle Kanäle, auch gelöschte. Ein zweiter Lauf ist ungefährlich und meldet `encrypted: 0`. Fehlt der Schlüssel, bricht der Lauf sofort ab (`YsocialTokenKey`, ohne Wiederholung). Optional `--input '{"batchSize": 100}'`, höchstens 500.
 
 **Grenzen:**
-- Der Temporal-Verlauf enthält weiter Klartext-Tokens. Postiz gibt ganze Kanal-Zeilen an seine Aktivitäten weiter (`refresh.token.workflow.ts`, `post.workflow.v1.0.1.ts` Z. 198–204), die Aktivität liest sie entschlüsselt. Das ist offen als Frage an Florian, Option für Phase 2: ein Payload-Codec für Temporal.
+- Postiz gibt ganze Kanal-Zeilen an seine Aktivitäten weiter (`refresh.token.workflow.ts`, `post.workflow.v1.0.1.ts` Z. 198–204), die Aktivität liest sie entschlüsselt. Ohne `YSOCIAL_TEMPORAL_KEY` steht der Token deshalb im Klartext im Temporal-Verlauf. Seit PR 40 verschlüsselt der Payload-Codec den Verlauf, siehe den nächsten Abschnitt.
 - Die Fluent-API von Prisma (`post.findUnique().integration()`) gibt die Chiffre zurück, Raw-Queries gehen an der Erweiterung vorbei. Postiz nutzt beides nicht. `ysocial.token.bypass.spec.ts` prüft die Quellen bei jedem PR.
 - Ein Schlüsselwechsel (Rotation) gehört nicht zu PR 25.
+
+## Verschlüsselte Temporal-Payloads (PR 40, E51)
+
+Postiz gibt ganze Kanal-Zeilen samt Token an seine Aktivitäten weiter. Fehler der Provider tragen den Request-Body in `details` und manchmal die Adresse mit `access_token` in der Meldung. Sobald `YSOCIAL_TEMPORAL_KEY` gesetzt ist, verschlüsselt ein Payload-Codec das alles im Namespace von Postiz (`TEMPORAL_NAMESPACE`, Standard `default`). Die Logik liegt in `libraries/ysocial/src/temporal/`, eingehängt über Patch 6 in `libraries/nestjs-libraries/src/temporal/temporal.module.ts`. Er gilt für Backend und Orchestrator, denn beide nutzen dieses Modul.
+
+**Verschlüsselt:** Eingaben und Ergebnisse von Workflows und Aktivitäten, Signale, Heartbeats, `details` von Fehlern. Dazu Meldung und Stacktrace jedes Fehlers der Kette (`failure.converter.ts`, wie `encodeCommonAttributes` von Temporal, aber für jede Ebene). Format: der ganze Payload als Protobuf, AES-256-GCM, Metadaten `encoding: binary/encrypted` und `encryption-key-id: <kid>` wie im Verschlüsselungs-Beispiel von Temporal. Abweichend vom Beispiel steht in `data` `iv | tag | Chiffre`, und die zusätzlichen Daten (AAD) binden sie an die Schlüssel-ID (`binary/encrypted:<kid>`). Ein späterer Codec-Server muss das so lesen. `<kid>` wird gebildet wie beim Token-Schlüssel: die ersten 8 Hex-Zeichen von SHA-256 über die 32 Byte.
+
+**Lesbar bleiben:** Workflow-IDs und -Typen, Task-Queues, Suchattribute (`postId`, `organizationId`, Postiz sucht danach), Zeiten und Status. `temporal workflow list`, `count` und `terminate` und die Skripte des Hubs (`restore-workflows.sh`) gehen wie bisher. `Post.error` behält sein Format: Der Workflow sieht die Fehler entschlüsselt, mit derselben Kette wie ohne Codec. Ein Test belegt, dass `JSON.stringify` des Fehlers Zeichen für Zeichen gleich bleibt.
+
+| Wer | Wie |
+|---|---|
+| Worker des Orchestrators (`main`, Provider-Queues, E-Mail-Queues) | `workerOptions.dataConverter` für jeden Eintrag in `workers`, `nestjs-temporal-core` reicht ihn an `Worker.create` weiter |
+| Client in Backend und Orchestrator (`TemporalService`, etwa `handle.result()` in `media.service.ts`, Workflow-Starts aus Aktivitäten) | `nestjs-temporal-core` nimmt für den Client keinen `dataConverter`. Der Wrapper ersetzt den Provider `TEMPORAL_CLIENT` durch einen Client auf derselben Verbindung mit Codec |
+| ysocial-Worker, `ysocial.temporal.client.ts`, `hub-worker` (Namespace `ysocial`) | ohne Codec. Ihre Ein- und Ausgaben tragen keine Tokens, die Kanal-Prüfung liest den Token nur in der Aktivität. Fehler eines Provider-Aufrufs gehen aber unverändert in den Verlauf: Scheitert `postAnalytics` in `ysocialCheckPostOnPlatform` mit `BadBody`, stehen Antwort und Request-Body der Plattform in `details`. Die Prüfungen rufen nur lesend mit GET ab, der Body ist dort leer, und die Meldung von `fetch` enthält keine Adresse. Restrisiko klein, kein Codec nach Entscheidung PR 40 |
+| Temporal-UI und CLI | ohne Codec-Server, die UI hat keine Anmeldung. Payloads zeigen `binary/encrypted`, Fehler „Encoded failure“. Zur Fehlersuche dienen die Logs der Container |
+
+**Startprüfung**, fail-closed wie beim Token-Schlüssel. Sie läuft in Backend und Orchestrator, bevor ein Port oder ein Worker startet. Schlägt sie fehl, endet der Prozess mit Exit-Code 1, pm2 startet ihn neu. Sobald der Codec im Namespace lief, merkt sich der Namespace die Schlüssel-ID in seinen Daten (`ysocial-payload-codec`, zu sehen mit `temporal operator namespace describe --namespace default`). Die Markierung liegt in der Datenbank von Temporal und kommt mit jeder Sicherung zurück.
+
+| Markierung | `YSOCIAL_TEMPORAL_KEY` | Ergebnis, Log |
+|---|---|---|
+| keine oder `off` | fehlt | Codec aus, Postiz wie bisher: `temporal codec off: …` |
+| keine oder `off` | gesetzt | Codec an, Markierung gesetzt: `temporal codec on (key <kid>, namespace default marked)` |
+| `<kid>` | derselbe Schlüssel | Codec an: `temporal codec on (key <kid>)` |
+| `<kid>` | fehlt | kein Start: `temporal codec check failed: YSOCIAL_TEMPORAL_KEY fehlt: Namespace default ist mit Schlüssel <kid> verschlüsselt …` |
+| `<kid>` | anderer Schlüssel | kein Start: `… YSOCIAL_TEMPORAL_KEY passt nicht: Namespace default ist mit Schlüssel <kid> verschlüsselt, YSOCIAL_TEMPORAL_KEY hat <kid>` |
+| egal | nicht 32 Byte als Base64, oder gleich `YSOCIAL_TOKEN_KEY` | kein Start: `… ist ungültig …` oder `… derselbe Schlüssel wie YSOCIAL_TOKEN_KEY …` |
+| Temporal antwortet nicht | egal | kein Start nach 3 Versuchen, etwa 1 Minute: `… Temporal nicht erreichbar … (gRPC-Status <Zahl>) …`. Fehlt der Namespace: `… Namespace default gibt es in Temporal nicht (gRPC-Status 5) …` |
+| Markierung lässt sich nicht setzen | gesetzt | kein Start: `… Markierung im Namespace default nicht gesetzt (gRPC-Status <Zahl>) …` |
+| `nestjs-temporal-core` liefert keinen Client | egal | kein Start: `… Temporal-Client fehlt …`. Die Worker würden sonst ohne Prüfung starten |
+
+**Neues Startverhalten ab 0.9.2:** Backend und Orchestrator starten nur noch, wenn Temporal beim Start antwortet, auch ohne Schlüssel. Bisher lief Postiz ohne Temporal an und meldete nur Fehler. Ohne Antwort weiß Postiz nicht, ob der Namespace markiert ist. Es könnte sonst neben verschlüsselten Verläufen still Klartext schreiben und die laufenden Workflows nicht lesen. Planen und Posten geht ohne Temporal ohnehin nicht. Postiz startet neu, bis Temporal antwortet.
+
+**Einschalten** an einem Tag mit wenigen geplanten Posts (R50). Die Hub-Seite folgt mit Hub-PR 41.
+1. Image mit PR 40 ausrollen, noch ohne Schlüssel. Im Log zweimal `temporal codec off`.
+2. Florian erzeugt je Umgebung einen eigenen Schlüssel (`openssl rand -base64 32`, nicht den Token-Schlüssel) und legt ihn mit der Schlüssel-ID in den Passwortmanager. Backend und Orchestrator bekommen denselben Wert.
+3. Postiz neu starten. Im Log zweimal `temporal codec on (key <kid>…)`, beim ersten mit `namespace default marked`.
+4. Ein neuer Workflow zeigt bei `temporal workflow show --namespace default --workflow-id <ID>` die Zeile `ResultEncoding binary/encrypted`. Ein Testpost geht raus. Workflows, die vorher liefen, laufen weiter: Alte Klartext-Payloads liest der Codec unverändert, neue schreibt er verschlüsselt.
+
+**Grenzen:**
+- Ist der Codec an, gibt es kein Rollback auf ein Image ohne PR 40. Ein solches Image kann `binary/encrypted` nicht lesen: Workflows hängen, Aktivitäten scheitern an ihrer Eingabe, Posts können auf `ERROR` gehen.
+- Geht der Schlüssel verloren, sind laufende Workflows im Postiz-Namespace nicht mehr lesbar. Dann alle laufenden Workflows dort beenden, die Markierung auf `off` setzen (unten) und geplante Posts neu einplanen. Der Sweep `missing-post-workflow` startet nur Posts der letzten 2 Tage neu.
+- Mehrere Orchestratoren brauchen alle denselben Schlüssel, zur selben Zeit. Nach dem ersten Start verhindert die Markierung einen Start ohne Schlüssel.
+- Altbestand: Verläufe von vor dem Codec bleiben Klartext, bis die Workflows enden und aus der Aufbewahrung fallen. In den Sicherungen von `temporal-postgres` stehen sie noch etwa 4 Wochen länger. Post-Workflows lesen den Kanal erst zum Termin, sie sind kaum betroffen. `refreshTokenWorkflow` hält die Kanal-Zeile von seinem Start bis zum Ablauf des Tokens. Möglich, aber nicht gebaut: die Refresh-Workflows über `RefreshIntegrationService.startRefreshWorkflow` von Postiz neu starten (`workflowIdConflictPolicy: TERMINATE_EXISTING`), wie Postiz es beim Neuverbinden tut. Der beendete Lauf bleibt bis zum Ende der Aufbewahrung im Verlauf.
+- Abschalten geht nur, wenn kein verschlüsselter Lauf mehr läuft: `temporal operator namespace update --namespace default --data 'ysocial-payload-codec="off"'`, danach den Schlüssel entfernen.
+- Ein Schlüsselwechsel (Rotation) gehört nicht zu PR 40.
+- `@temporalio/proto` steht nicht in `package.json` von Postiz. Es kommt als Abhängigkeit von `@temporalio/common` in derselben Version, auflösbar über `node-linker=hoisted` (`.npmrc`). Fällt das weg, bricht der Bau ab.
+- Ändert `nestjs-temporal-core` die Provider `TEMPORAL_MODULE_OPTIONS` (useValue) oder `TEMPORAL_CLIENT` (useFactory), wirft der Wrapper beim Laden, auch ohne Schlüssel. Tests prüfen das gegen das installierte `TemporalModule.register` und prüfen, dass `TemporalWorkerManagerService` den `dataConverter` an `Worker.create` gibt. Der Wrapper baut den Client nur mit `connection`, `namespace` und `dataConverter` neu. Weitere Client-Optionen, die `nestjs-temporal-core` künftig setzen könnte, übernimmt er nicht (Prüfliste in `YSOCIAL-PATCHES.md`).
+
+Test gegen einen echten Temporal-Server, sonst übersprungen. Er nutzt nur den Namespace `ysocial-codec-it` und legt ihn selbst an:
+
+    docker run --rm --name ysocial-codec-it -p 127.0.0.1:7233:7233 --entrypoint temporal temporalio/auto-setup:1.28.1 server start-dev --ip 0.0.0.0 --headless
+    YSOCIAL_IT_TEMPORAL_ADDRESS=127.0.0.1:7233 pnpm exec jest -c libraries/ysocial/jest.config.js ysocial.temporal.codec.integration
+
+Er belegt: Ein Lauf, der ohne Codec beginnt, läuft nach dem Einschalten weiter. Im Verlauf eines neuen Laufs steht der Token nirgends, auch nicht in Fehlermeldungen. Das Fehler-JSON im Workflow ist dasselbe wie ohne Codec. Ein Client ohne Codec kann die Ergebnisse nicht lesen. Die Startprüfung weist ohne und mit falschem Schlüssel ab.
 
 ## Lese-API für den Hub (Backend, PR 18, Inhalt seit PR 36)
 

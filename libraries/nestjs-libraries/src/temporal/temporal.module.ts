@@ -1,6 +1,8 @@
 import { TemporalModule } from 'nestjs-temporal-core';
 import { socialIntegrationList } from '@gitroom/nestjs-libraries/integrations/integration.manager';
 import { emailQueues } from '@gitroom/nestjs-libraries/temporal/email.queues';
+// ysocial patch 6 (YSOCIAL-PATCHES.md)
+import { withYsocialPayloadCodec } from '../../../ysocial/src/temporal/ysocial.temporal.codec';
 
 export const getTemporalModule = (
   isWorkers: boolean,
@@ -24,7 +26,7 @@ export const getTemporalModule = (
     Number(process.env.WORKER_CONCURRENCY_DIVIDER) || 1
   );
 
-  return TemporalModule.register({
+  const temporalModule = TemporalModule.register({
     isGlobal: true,
     connection: {
       address: process.env.TEMPORAL_ADDRESS || 'localhost:7233',
@@ -97,4 +99,8 @@ export const getTemporalModule = (
         }
       : {}),
   });
+
+  // ysocial patch 6 (YSOCIAL-PATCHES.md): payloads in Temporal are encrypted
+  // once YSOCIAL_TEMPORAL_KEY is set, for the client and every worker.
+  return withYsocialPayloadCodec(temporalModule);
 };
