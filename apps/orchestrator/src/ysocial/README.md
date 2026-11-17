@@ -318,7 +318,7 @@ Beide hinter `YsocialTestRoutesGuard` und `YsocialTokenGuard`. Steht die ID nich
 
 ## Inbox-Demo (Backend, PR 26, nur Staging)
 
-Für die Meta-Screencasts (E25, W15, `docs/plattformen/meta.md` im Hub): Kommentare der letzten Instagram-Beiträge lesen, als Konto antworten, verbergen, löschen. Die Demo-Seite im Hub (PR 27) ruft diese Routen. Gespeichert wird nichts, es gibt keine Tabelle. Tickets und Ereignisse `inbox.*` an den Hub kommen später im Hub.
+Für die Meta-Screencasts (E25, W15, `docs/plattformen/meta.md` im Hub): Kommentare der letzten Instagram-Beiträge und, ab 0.9.0, der letzten Posts einer Facebook-Seite lesen, als Konto oder Seite antworten, verbergen, wieder zeigen, löschen. Die Demo-Seite im Hub (PR 27) ruft diese Routen. Gespeichert wird nichts, es gibt keine Tabelle. Tickets und Ereignisse `inbox.*` an den Hub kommen später im Hub.
 
 | Variable | Wert |
 |---|---|
@@ -326,8 +326,8 @@ Für die Meta-Screencasts (E25, W15, `docs/plattformen/meta.md` im Hub): Komment
 
 | Route | Wirkung |
 |---|---|
-| `GET /ysocial/inbox/integrations/:id/comments` | Die letzten 10 Beiträge des Kontos, je bis zu 50 Kommentare (neueste zuerst) mit ihren Antworten |
-| `POST /ysocial/inbox/integrations/:id/comments/:commentId/replies` | Antwort als Konto, Body `{"message": "…"}`. 201 `{"integrationId":"…","commentId":"…","replyId":"…"}` |
+| `GET /ysocial/inbox/integrations/:id/comments` | Die letzten 10 Beiträge des Kontos oder der Seite, je bis zu 50 Kommentare (neueste zuerst) mit ihren Antworten |
+| `POST /ysocial/inbox/integrations/:id/comments/:commentId/replies` | Antwort als Konto oder Seite, Body `{"message": "…"}`. 201 `{"integrationId":"…","commentId":"…","replyId":"…"}` |
 | `POST /ysocial/inbox/integrations/:id/comments/:commentId/hide` | `{"hide": true}` verbirgt, `{"hide": false}` zeigt wieder. 200 `{…,"hidden":true}` |
 | `DELETE /ysocial/inbox/integrations/:id/comments/:commentId` | Löscht, nur mit Body `{"confirmDelete": true}`. 200 `{…,"deleted":true}` |
 
@@ -347,12 +347,30 @@ Antwort der Leseroute:
 
 Ohne Bildunterschrift (`caption`): Posttext ist eine eigene Entscheidung wie bei der Lese-API. `commentsCount` kommt von Meta, zählt Antworten mit und kann größer sein als die Liste.
 
+Für Facebook hat die Antwort dieselbe Form mit `"provider": "facebook"`. Die Felder kommen so von Meta:
+
+| Feld | Facebook |
+|---|---|
+| `posts[].id` | ID des Seiten-Posts (`<Seite>_<Post>`) |
+| `posts[].permalink` | `permalink_url`, Link auf `facebook.com` |
+| `posts[].timestamp` | `created_time` |
+| `posts[].mediaType` | `status_type`, etwa `added_photos` oder `mobile_status_update` |
+| `posts[].commentsCount` | `summary.total_count` der Kommentare, zählt nur Kommentare der obersten Ebene, Antworten nicht |
+| `text` | `message` |
+| `username` | `from.name`, der angezeigte Name der Person oder Seite. Die seitenbezogene ID aus `from.id` gibt die Route nicht weiter |
+| `timestamp` | `created_time` |
+| `likeCount` | `like_count` |
+| `hidden` | `is_hidden` |
+| `replies` | Kante `comments` des Kommentars, erste Seite |
+
 **Regeln**
 - Jede Route prüft selbst, ob der Kanal in `YSOCIAL_DEMO_INTEGRATIONS` steht (Regel 9). Der Guard entscheidet nur, ob es die Routen gibt.
 - Geschrieben wird nur auf einen Aufruf über die Route (Regel 2). Kein Workflow, kein Schedule, keine automatische Antwort. Der Hub prüft die Rolle der Person und schickt sie im Kopf mit.
-- Vor jeder schreibenden Aktion prüft die Route an der Plattform, ob der Kommentar unter einem Beitrag dieses Kontos steht: Feld `media` des Kommentars (bei einer Antwort ohne `media` über `parent_id` der Kommentar darüber), dann `owner` des Beitrags gleich `internalId` des Kanals. Sonst 404 `comment_not_found`, und nichts ändert sich.
+- Vor jeder schreibenden Aktion prüft die Route an der Plattform, ob der Kommentar unter einem Beitrag dieses Kontos steht. Sonst 404 `comment_not_found`, und nichts ändert sich.
+  - Instagram: Feld `media` des Kommentars (bei einer Antwort ohne `media` über `parent_id` der Kommentar darüber), dann `owner` des Beitrags gleich `internalId` des Kanals.
+  - Facebook: Die Comment-Referenz von Meta nennt kein Feld, das vom Kommentar zu seinem Post führt, nur `parent` bei einer Antwort. Die Route liest deshalb dieselbe Liste wie die Leseroute und schreibt nur, wenn der Kommentar oder die Antwort darin steht: unter einem der letzten 10 Posts der Seite, unter den ersten 50 Kommentaren, bei Antworten auf der ersten Seite. Ältere Kommentare kann die Demo nicht ändern, sie zeigt sie auch nicht.
 - Löschen ohne `"confirmDelete": true` ergibt 409 `confirmation_required`, ohne Plattformaufruf.
-- Token: der Page-Token aus `Integration.token` (`<Page-Token>___<User-Token>`), wie `comment()` und `analytics()` des Postiz-Providers. Er steht nur in der Anfrage an Meta (Adresse bei `GET` und `DELETE`, Body bei `POST`), nie in Log oder Antwort. Der Antworttext geht im Body an Meta, nicht in der Adresse.
+- Token: der Page-Token aus `Integration.token`, wie `comment()` und `analytics()` des Postiz-Providers. Bei Instagram ist das der erste Teil von `<Page-Token>___<User-Token>`, bei Facebook der ganze Wert. Er steht nur in der Anfrage an Meta (Adresse bei `GET` und `DELETE`, Body bei `POST`), nie in Log oder Antwort. Der Antworttext geht im Body an Meta, nicht in der Adresse. Den Aufruf an Meta machen beide Provider über `libraries/ysocial/src/inbox/meta.graph.ts`.
 
 | Antwort | `code` | Wann |
 |---|---|---|
@@ -363,16 +381,16 @@ Ohne Bildunterschrift (`caption`): Posttext ist eine eigene Entscheidung wie bei
 | 400 | `invalid_comment_id` | `commentId` besteht nicht nur aus Ziffern und `_` |
 | 403 | `not_demo_integration` | Kanal steht nicht in der Liste |
 | 404 | `not_found` | Kanal unbekannt |
-| 404 | `comment_not_found` | Kommentar steht nicht unter einem Beitrag dieses Kontos, Meta kennt ihn nicht (Code 100, Subcode 33, etwa direkt nach dem Löschen) oder die ID hat ein `_` (Instagram-IDs bestehen nur aus Ziffern) |
+| 404 | `comment_not_found` | Kommentar steht nicht unter einem Beitrag dieses Kontos, Meta kennt ihn nicht (Code 100, Subcode 33, etwa direkt nach dem Löschen) oder die ID hat ein `_` (Instagram-IDs bestehen nur aus Ziffern). Bei Facebook: Kommentar steht nicht in der Liste der Leseroute (oben), oder die ID hat nicht die Form `<Ziffern>_<Ziffern>` |
 | 409 | `confirmation_required` | Löschen ohne Bestätigung |
 | 409 | `channel_inactive` | Kanal gelöscht, `disabled`, `refreshNeeded` oder `inBetweenSteps`, steht in `flag` |
-| 409 | `provider_not_supported` | Kanal ohne Inbox, steht in `provider`. Zurzeit nur `instagram` |
+| 409 | `provider_not_supported` | Kanal ohne Inbox, steht in `provider`. Zurzeit `instagram` und `facebook` |
 | 502 | `platform_error` | Meta lehnt ab (beim Schreiben nur Antworten unter 500): `platformStatus`, `platformCode`, `platformSubcode` und `reason`, die Meldung von Meta, bereinigt wie `reason` bei Ereignissen |
 | 500 | `internal_error` | Unerwarteter Fehler, etwa Datenbank oder Entschlüsselung des Tokens. Im Log nur der Name der Fehlerklasse, bei Prisma dazu der Code (`P1001` und so weiter). Als `HttpException` geht er nicht an den Sentry-Filter von Postiz, der den Body der Anfrage (den Antworttext) mitschicken würde |
 | 503 | `platform_unavailable` | Meta beim Lesen oder bei der Prüfung vor dem Schreiben nicht erreichbar oder keine Antwort nach 15 s. Nichts geändert |
 | 503 | `outcome_unknown` | Keine klare Antwort von Meta auf das Schreiben selbst: Netzfehler, 15 s ohne Antwort oder ein Fehler 5xx von Meta (im Log dann mit Status und Codes). Meta hat es vielleicht trotzdem getan. Der Hub wiederholt den Aufruf nicht von selbst, sondern lädt die Kommentare neu und zeigt den Stand |
 
-Dauer: Jede Anfrage an Meta bricht nach 15 s ab. Lesen braucht 1 Anfrage für die Beiträge und bis zu 10 parallel für die Kommentare, also höchstens etwa 30 s. Schreiben macht bis zu 4 Anfragen nacheinander (Kommentar, Kommentar darüber, Beitrag, Schreiben), also höchstens etwa 60 s. Der Hub wartet mindestens so lange. Bricht er vorher ab, läuft das Schreiben im Fork trotzdem weiter.
+Dauer: Jede Anfrage an Meta bricht nach 15 s ab. Lesen braucht 1 Anfrage für die Beiträge und bis zu 10 parallel für die Kommentare, also höchstens etwa 30 s. Schreiben macht bei Instagram bis zu 4 Anfragen nacheinander (Kommentar, Kommentar darüber, Beitrag, Schreiben), also höchstens etwa 60 s. Bei Facebook liest es erst die Liste wie die Leseroute (bis zu 11 Anfragen, etwa 30 s) und schreibt dann, also höchstens etwa 45 s. Der Hub wartet mindestens 60 s. Bricht er vorher ab, läuft das Schreiben im Fork trotzdem weiter.
 
 Im Log steht je Aufruf nur, was eine Prüfung bestanden hat, die Person und Zahlen: `inbox comments channel=<id> result=ok posts=<n> comments=<n>` und `inbox <reply|hide|unhide|delete> channel=<id> comment=<commentId> actor=<X-Ysocial-Actor> result=<done|rejected code=…>`. Bei `platform_error` stehen dort Status und Codes von Meta, nie ihre Meldung. Kommentartext, Namen der Kommentierenden und Antworttext stehen nie im Log. Eine Kanal-ID, die nicht in der Liste steht, und eine ungültige Kommentar-ID stehen dort als `-`.
 
@@ -398,7 +416,24 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - Meta nennt für diese Aufrufe teils den User-Token (Referenz), teils den Page-Token (Leitfaden zur Moderation). Die Demo nimmt den Page-Token wie Postiz.
 - Webhooks für Instagram-Kommentare gibt es erst mit Advanced Access (`meta.md` 2.6). Bis dahin liest die Demo auf Abruf.
 
-**Facebook** fehlt noch. Kommentare einer Seite lesen braucht laut Meta `pages_read_user_content` („read user generated content on the Page, such as posts, comments, and ratings“, Permissions Reference). Seit PR 38 (E58) hängen Patch 4 und 5 die Liste aus `libraries/ysocial/src/scopes/meta.scopes.ts` an die Scopes von `facebook` und `instagram`, eine Zeile je Scope. Was dort steht, fragt Postiz beim Verbinden an und verlangt es (`checkScopes`). Seiten, die vorher verbunden wurden, tragen neue Rechte erst nach erneutem Verbinden. `facebook.inbox.ts` gibt es noch nicht. Wann eine Zeile wegfällt, steht im Kopf von `meta.scopes.ts`.
+**Facebook** (ab 0.9.0, PLAN Phase 2, Video für `pages_read_user_content` und `pages_manage_engagement` Welle 2): `libraries/ysocial/src/inbox/facebook.inbox.ts`. Endpunkte und Rechte laut offizieller Meta-Referenz (gelesen am 17.11.2026, Links im Kopf der Datei):
+
+| Aufruf | Rechte |
+|---|---|
+| `GET /{page-id}/published_posts`, Felder `id,permalink_url,created_time,status_type`, `limit=10` | Page-Token einer Person mit Aufgabe auf der Seite, `pages_read_engagement`, `pages_read_user_content` (Page Feed). Nur Posts der Seite selbst, keine Posts von Besuchern |
+| `GET /{page-post-id}/comments` mit `filter=toplevel`, `order=reverse_chronological`, `summary=true`, `limit=50` und der Kante `comments` je Kommentar | „The same permissions required to view the parent object“. IDs der Kommentare nur mit der Aufgabe MODERATE. `pages_read_user_content`: „read user generated content on the Page, such as posts, comments, and ratings“ |
+| `POST /{comment-id}/comments` mit `message` | Page-Token einer Person mit der Aufgabe MODERATE, `pages_manage_engagement` |
+| `POST /{comment-id}` mit `is_hidden=true` oder `false` | `is_hidden`: „Only applicable to Page comments“. `pages_manage_engagement` („create, edit and delete comments posted on the Page“) |
+| `DELETE /{comment-id}` | `pages_manage_engagement`, `pages_read_user_content` („delete user comments on Page posts“) |
+
+`pages_show_list`, `pages_read_engagement` und `pages_manage_engagement` fragt der Postiz-Provider `facebook` selbst an, `pages_read_user_content` seit Patch 4 (PR 38, E58) über `libraries/ysocial/src/scopes/meta.scopes.ts`. Was dort steht, fragt Postiz beim Verbinden an und verlangt es (`checkScopes`). Seiten, die vorher verbunden wurden, tragen neue Rechte erst nach erneutem Verbinden. Für die Facebook-Inbox braucht es keinen weiteren Patch. Wann eine Zeile in `meta.scopes.ts` wegfällt, steht in ihrem Kopf.
+
+**Grenzen und Ungeprüftes bei Facebook**
+- `message`, `from` und `created_time` am Kommentar belegt der Leitfaden „Comments and @mentions“ der Pages API. `is_hidden` nennt die aktuelle Comment-Referenz nur als Parameter zum Ändern, nicht in der Feldliste. Lehnt Meta das Feld beim Lesen ab, endet die Leseroute mit 502 `platform_error` und Code 100. **Ungeprüft**, auf Staging prüfen (PR-QA).
+- Ob verborgene Kommentare in der Liste stehen, sagt die Doku nicht. Fehlen sie, kann die Demo einen verborgenen Kommentar nicht wieder zeigen (404 `comment_not_found`, nichts geändert). **Ungeprüft**, auf Staging prüfen.
+- Ob `from.name` bei Personen ohne Rolle in der App mit Standard Access kommt, ist **ungeprüft** (`meta.md` 4, „Business Asset User Profile Access“). Fehlt es, steht `username` auf `null`.
+- `order=reverse_chronological` steht in der Referenz als Wert von `summary.order`. Ohne Wirkung kämen die ältesten 50 Kommentare. Für die Aufnahmen mit wenigen Kommentaren spielt das keine Rolle.
+- Ohne Posttext wie bei Instagram. Den Bezug zum Post zeigt der Link `permalink`.
 
 ## Ping von Hand (PR 16, QA 4)
 

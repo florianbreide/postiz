@@ -2,7 +2,7 @@
  * Inbox demo for the Meta screencasts (PLAN 3.3 PR 26, E25, W15): read the
  * comments of the latest posts of a channel, reply as the account, hide and
  * delete. Pure functions and types, the platform calls are in
- * instagram.inbox.ts.
+ * instagram.inbox.ts and facebook.inbox.ts (Graph API in meta.graph.ts).
  *
  * Only for the channels listed in YSOCIAL_DEMO_INTEGRATIONS (ids, comma
  * separated, only Y Social channels on staging). Without the variable the
@@ -38,13 +38,13 @@ export const isPlatformId = (value: unknown): value is string =>
   typeof value === 'string' && PLATFORM_ID_PATTERN.test(value);
 
 // Latest posts per read and comments per post. Instagram returns at most 50
-// comments per query, newest first.
+// comments per query, newest first. Facebook gets the same numbers.
 export const INBOX_POSTS_LIMIT = 10;
 export const INBOX_COMMENTS_LIMIT = 50;
 
 // Upper bound for a reply, like maxLength() of the Postiz Instagram
-// provider. The platform may reject shorter texts, then the route answers
-// platform_error.
+// provider, for Facebook as well. The platform may reject shorter texts,
+// then the route answers platform_error.
 export const INBOX_REPLY_MAX_LENGTH = 2200;
 
 export interface InboxReply {

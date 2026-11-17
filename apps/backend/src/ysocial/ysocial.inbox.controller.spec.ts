@@ -607,7 +607,7 @@ describe('/ysocial/inbox', () => {
       }
     );
 
-    it.each(['facebook', 'instagram-standalone'])(
+    it.each(['linkedin', 'instagram-standalone'])(
       'answers 409 provider_not_supported for %s',
       async (provider) => {
         repository.getChannelForInbox.mockResolvedValue(
@@ -1029,7 +1029,7 @@ describe('/ysocial/inbox', () => {
       repository.getChannelForInbox.mockResolvedValue(null);
       expect((await read()).status).toBe(404);
       repository.getChannelForInbox.mockResolvedValue(
-        row({ providerIdentifier: 'facebook' })
+        row({ providerIdentifier: 'linkedin' })
       );
       expect((await reply()).status).toBe(409);
     });

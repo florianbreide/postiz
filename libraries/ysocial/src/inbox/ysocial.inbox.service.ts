@@ -17,6 +17,7 @@ import {
   YsocialInboxProvider,
 } from './inbox.rules';
 import { InstagramInbox } from './instagram.inbox';
+import { FacebookInbox } from './facebook.inbox';
 
 type Rejection = { status: number; code: string; [field: string]: unknown };
 type Log = (result: string) => void;
@@ -52,8 +53,8 @@ const countComments = (posts: InboxPost[]) =>
  *   routes exist.
  * - Writes only on a call of a person through the route (rule 2). The hub
  *   checks the role and sends who it was in X-Ysocial-Actor. Delete needs
- *   {"confirmDelete": true}. A write happens only on a comment on media of
- *   the channel itself.
+ *   {"confirmDelete": true}. A write happens only on a comment on a post of
+ *   the channel itself (ownsComment of the provider).
  * - The log gets ids, the actor and counts. Never a comment text, the name
  *   of a commenter, a token or the message of the platform.
  * - Unexpected errors become 500 internal_error. As an HttpException they
@@ -65,12 +66,13 @@ const countComments = (posts: InboxPost[]) =>
 export class YsocialInboxService {
   private readonly _logger = new Logger('ysocial');
 
-  // One inbox provider per Postiz provider identifier. Facebook is still
-  // missing: reading Page comments needs pages_read_user_content. The Postiz
-  // provider asks for the scopes in scopes/meta.scopes.ts (ysocial patch 4),
-  // Pages connected before carry them only after they are connected again.
+  // One inbox provider per Postiz provider identifier. Facebook reads Page
+  // comments with pages_read_user_content, which the Postiz provider asks
+  // for since ysocial patch 4 (scopes/meta.scopes.ts). Pages connected
+  // before carry it only after they are connected again.
   protected providers: Record<string, YsocialInboxProvider> = {
     instagram: new InstagramInbox(),
+    facebook: new FacebookInbox(),
   };
 
   constructor(private _inbox: YsocialInboxRepository) {}
