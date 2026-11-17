@@ -1,5 +1,9 @@
 import { randomBytes } from 'crypto';
-import { readYsocialWorkerConfig, YSOCIAL_TASK_QUEUE } from './worker.config';
+import {
+  readHubClientConfig,
+  readYsocialWorkerConfig,
+  YSOCIAL_TASK_QUEUE,
+} from './worker.config';
 
 const token = randomBytes(32).toString('hex');
 
@@ -129,5 +133,68 @@ describe('readYsocialWorkerConfig', () => {
     });
     expect(result.config?.temporalTls).toBe(true);
     expect(result.config?.temporalApiKey).toBe('key');
+  });
+});
+
+describe('readHubClientConfig', () => {
+  const env = {
+    HUB_INTERNAL_URL: 'http://hub-web:3000/',
+    HUB_INTERNAL_TOKEN: token,
+  };
+
+  it('reads the hub address without a trailing slash and the token', () => {
+    expect(readHubClientConfig(env)).toEqual({
+      hubUrl: 'http://hub-web:3000',
+      hubToken: token,
+    });
+  });
+
+  it('does not need Temporal', () => {
+    expect(readHubClientConfig(env)).toBeDefined();
+    expect(
+      readHubClientConfig({ ...env, YSOCIAL_TEMPORAL_NAMESPACE: undefined })
+    ).toBeDefined();
+  });
+
+  it('trims the token', () => {
+    expect(
+      readHubClientConfig({ ...env, HUB_INTERNAL_TOKEN: ` ${token}\n` })
+        ?.hubToken
+    ).toBe(token);
+  });
+
+  it.each([undefined, '', '   '])('is undefined without a URL (%j)', (url) => {
+    expect(
+      readHubClientConfig({ ...env, HUB_INTERNAL_URL: url })
+    ).toBeUndefined();
+  });
+
+  it.each(['not a url', 'ftp://hub', 'http://user:pass@hub:3000'])(
+    'is undefined for the invalid URL %j',
+    (url) => {
+      expect(
+        readHubClientConfig({ ...env, HUB_INTERNAL_URL: url })
+      ).toBeUndefined();
+    }
+  );
+
+  it.each([undefined, '', '   ', 'short-secret', 'x'.repeat(31)])(
+    'is undefined for a missing or too short token (%j)',
+    (value) => {
+      expect(
+        readHubClientConfig({ ...env, HUB_INTERNAL_TOKEN: value })
+      ).toBeUndefined();
+    }
+  );
+
+  it('accepts a token of exactly 32 characters', () => {
+    expect(
+      readHubClientConfig({ ...env, HUB_INTERNAL_TOKEN: 'x'.repeat(32) })
+        ?.hubToken
+    ).toBe('x'.repeat(32));
+  });
+
+  it('is undefined for an empty environment', () => {
+    expect(readHubClientConfig({})).toBeUndefined();
   });
 });

@@ -12,7 +12,11 @@ import {
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { YsocialTokenGuard } from './ysocial.token.guard';
-import { InboxDemoOnly, YsocialInboxGuard } from './ysocial.inbox.guard';
+import {
+  InboxDemoOnly,
+  InboxWebhooksRoute,
+  YsocialInboxGuard,
+} from './ysocial.inbox.guard';
 import { YsocialInboxDemoGuard } from './ysocial.inbox.demo.guard';
 import { YsocialInboxService } from '../../../../libraries/ysocial/src/inbox/ysocial.inbox.service';
 import {
@@ -31,9 +35,11 @@ import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/web
 // /ysocial/status: the reverse proxy blocks /api/ysocial/* from outside. The
 // guards run in this order: without the demo list and the switch the routes
 // do not exist (404), then the service token. Writes need X-Ysocial-Actor
-// like the retry route. The webhook routes stay with the demo list
-// (InboxDemoOnly, also 404 before the token). The routes of one comment take
-// ?postId= (YsocialInboxCommentQueryDto).
+// like the retry route. The routes for the webhooks of a channel exist with
+// the demo list or YSOCIAL_INBOX_EVENTS=true (InboxWebhooksRoute, PR 74),
+// the log of the events with the demo list only (InboxDemoOnly), both 404
+// before the token. The routes of one comment take ?postId=
+// (YsocialInboxCommentQueryDto).
 @ApiExcludeController()
 @UseGuards(YsocialInboxGuard, YsocialTokenGuard)
 @Controller('/ysocial/inbox')
@@ -147,20 +153,19 @@ export class YsocialInboxController {
     );
   }
 
-  // Webhooks for the demo (PR B): is our app on the Page of the channel?
-  // Only with the demo list, for every channel with PR 74.
+  // Is our app on the Page of the channel (PR B)? With the demo list, for
+  // every channel with YSOCIAL_INBOX_EVENTS=true (PR 74).
   @Get('/integrations/:id/webhooks')
-  @InboxDemoOnly()
-  @UseGuards(YsocialInboxDemoGuard)
+  @InboxWebhooksRoute()
   getWebhooks(@Param('id') id: string) {
     return this._inboxService.getWebhooks(id);
   }
 
   // Puts our app on the Page with the field feed. A write at Meta, so
-  // X-Ysocial-Actor like the other writes.
+  // X-Ysocial-Actor like the other writes. The hub lets only an admin
+  // trigger it (E97).
   @Post('/integrations/:id/webhooks')
-  @InboxDemoOnly()
-  @UseGuards(YsocialInboxDemoGuard)
+  @InboxWebhooksRoute()
   @HttpCode(200)
   subscribeWebhooks(
     @Param('id') id: string,

@@ -19,6 +19,7 @@ import { YsocialModule } from './ysocial.module';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
+import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
 import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
 import { WEBHOOK_LOG_KEY } from '../../../../libraries/ysocial/src/webhooks/webhook.rules';
@@ -26,10 +27,23 @@ import { WEBHOOK_LOG_KEY } from '../../../../libraries/ysocial/src/webhooks/webh
 const LIST_ENV = 'YSOCIAL_DEMO_INTEGRATIONS';
 const VERIFY_ENV = 'YSOCIAL_META_WEBHOOK_VERIFY_TOKEN';
 const SECRET_ENV = 'FACEBOOK_APP_SECRET';
-const ENVS = [LIST_ENV, VERIFY_ENV, SECRET_ENV];
+// Phase 3, PR 74: the receiver exists with this switch, not with the list.
+const EVENTS_ENV = 'YSOCIAL_INBOX_EVENTS';
+const HUB_URL_ENV = 'HUB_INTERNAL_URL';
+const HUB_TOKEN_ENV = 'HUB_INTERNAL_TOKEN';
+const ENVS = [
+  LIST_ENV,
+  VERIFY_ENV,
+  SECRET_ENV,
+  EVENTS_ENV,
+  HUB_URL_ENV,
+  HUB_TOKEN_ENV,
+];
+const HUB = 'http://hub.test';
 
 const verifyToken = randomBytes(32).toString('hex');
 const appSecret = randomBytes(24).toString('hex');
+const hubToken = randomBytes(32).toString('hex');
 
 // Invented data only.
 const CHANNEL = 'int-demo-fb-1';
@@ -91,6 +105,15 @@ const instagramNotification = () => ({
 const sign = (body: string, secret = appSecret) =>
   `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
 
+// Stand-in for the channels of a Page. Two organizations may have one each.
+const channels = { getChannelsForWebhook: jest.fn() };
+const channel = (id: string, organizationId: string) => ({
+  id,
+  organizationId,
+  customerId: null as string | null,
+  providerIdentifier: 'facebook',
+});
+
 const postsService = {};
 const integrationManager = {};
 const temporalService = {};
@@ -141,6 +164,8 @@ describe('/ysocial-meta-webhook', () => {
   let baseUrl: string;
   let store: FakeStore;
   let graphCalls: string[];
+  let hubCalls: { url: string; headers: Record<string, string>; raw: string }[];
+  let hubAnswer: () => Promise<{ status: number }>;
   let logLines: string[];
   let responses: string[];
   let logs: jest.SpyInstance[];
@@ -157,6 +182,8 @@ describe('/ysocial-meta-webhook', () => {
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue({})
+      .overrideProvider(YsocialWebhookRepository)
+      .useValue(channels)
       .compile();
     store = new FakeStore();
     moduleRef.get(YsocialMetaWebhookService)['store'] = store;
@@ -181,8 +208,17 @@ describe('/ysocial-meta-webhook', () => {
 
   beforeEach(() => {
     process.env[LIST_ENV] = CHANNEL;
+    process.env[EVENTS_ENV] = 'true';
     process.env[VERIFY_ENV] = verifyToken;
     process.env[SECRET_ENV] = appSecret;
+    process.env[HUB_URL_ENV] = HUB;
+    process.env[HUB_TOKEN_ENV] = hubToken;
+    channels.getChannelsForWebhook.mockReset();
+    channels.getChannelsForWebhook.mockResolvedValue([
+      channel('int-fb-1', 'org-1'),
+    ]);
+    hubCalls = [];
+    hubAnswer = async () => ({ status: 202 });
     store.list = [];
     store.ops = [];
     store.failing = false;
@@ -196,6 +232,15 @@ describe('/ysocial-meta-webhook', () => {
       if (/^https?:\/\/[^/]*(facebook|instagram|fbcdn)\./.test(url)) {
         graphCalls.push(url);
         throw new Error('no network in this test');
+      }
+      // Rule 10: the hub is never called for real either.
+      if (url.startsWith(HUB)) {
+        hubCalls.push({
+          url,
+          headers: init.headers,
+          raw: String(init.body),
+        });
+        return hubAnswer();
       }
       return realFetch(input, init);
     }) as typeof fetch;
@@ -225,8 +270,21 @@ describe('/ysocial-meta-webhook', () => {
       COMMENTER,
       COMMENTER_NAME,
       COMMENTER_ID,
+      hubToken,
     ]) {
       expect(log).not.toContain(secret);
+    }
+    // No text, no name and no token in what goes to the hub.
+    for (const call of hubCalls) {
+      for (const secret of [
+        COMMENT_TEXT,
+        COMMENTER,
+        COMMENTER_NAME,
+        COMMENTER_ID,
+      ]) {
+        expect(call.raw).not.toContain(secret);
+      }
+      expect(call.raw).not.toMatch(/"(message|text|from|username)"/);
     }
     for (const text of responses) {
       for (const secret of [verifyToken, appSecret, COMMENT_TEXT, COMMENTER]) {
@@ -295,26 +353,47 @@ describe('/ysocial-meta-webhook', () => {
 
   const stored = () => store.list.map((value) => JSON.parse(value));
 
-  describe('without YSOCIAL_DEMO_INTEGRATIONS', () => {
-    it.each([undefined, '', '  ,  '])(
-      'answers 404 for GET and POST (list %j), also with a valid token and signature',
-      async (list) => {
-        if (list === undefined) {
-          delete process.env[LIST_ENV];
+  describe('without YSOCIAL_INBOX_EVENTS', () => {
+    const noCalls = () => {
+      expect(store.ops).toEqual([]);
+      expect(hubCalls).toEqual([]);
+      expect(channels.getChannelsForWebhook).not.toHaveBeenCalled();
+    };
+
+    it.each([undefined, '', 'false', 'TRUE', 'True', '1', ' true'])(
+      'answers 404 for GET and POST (switch %j), also with a demo list, a valid token and signature',
+      async (value) => {
+        if (value === undefined) {
+          delete process.env[EVENTS_ENV];
         } else {
-          process.env[LIST_ENV] = list;
+          process.env[EVENTS_ENV] = value;
         }
+        expect(process.env[LIST_ENV]).toBe(CHANNEL);
         const get = await verify();
         expect(get.status).toBe(404);
         expect(get.json().error).toBe('Not Found');
         const post = await receive();
         expect(post.status).toBe(404);
-        expect(store.ops).toEqual([]);
+        noCalls();
       }
     );
 
-    it('answers 404 before 503 when nothing is configured at all', async () => {
+    it('answers 404 without the switch and without a demo list as well', async () => {
+      delete process.env[EVENTS_ENV];
       delete process.env[LIST_ENV];
+      expect((await verify()).status).toBe(404);
+      expect((await receive()).status).toBe(404);
+      noCalls();
+    });
+
+    it('answers 404 for an Instagram notification as well, and rings nobody', async () => {
+      delete process.env[EVENTS_ENV];
+      expect((await receive(instagramNotification())).status).toBe(404);
+      noCalls();
+    });
+
+    it('answers 404 before 503 when nothing is configured at all', async () => {
+      delete process.env[EVENTS_ENV];
       delete process.env[VERIFY_ENV];
       delete process.env[SECRET_ENV];
       expect((await verify()).status).toBe(404);
@@ -322,7 +401,7 @@ describe('/ysocial-meta-webhook', () => {
     });
 
     it('answers 404 before 403 and 401 for wrong credentials', async () => {
-      delete process.env[LIST_ENV];
+      delete process.env[EVENTS_ENV];
       expect((await verify({ 'hub.verify_token': 'wrong' })).status).toBe(404);
       expect(
         (await receive(notification(), { signature: 'sha256=x' })).status
@@ -330,12 +409,41 @@ describe('/ysocial-meta-webhook', () => {
     });
 
     it('logs nothing from the webhook guard', async () => {
-      delete process.env[LIST_ENV];
+      delete process.env[EVENTS_ENV];
       await verify();
       await receive();
       expect(logLines.filter((line) => line.includes('meta webhook'))).toEqual(
         []
       );
+    });
+  });
+
+  describe('with YSOCIAL_INBOX_EVENTS=true and no demo list', () => {
+    beforeEach(() => {
+      delete process.env[LIST_ENV];
+    });
+
+    it('answers the verification request (GET)', async () => {
+      const res = await verify();
+      expect(res.status).toBe(200);
+      expect(res.text).toBe(CHALLENGE);
+    });
+
+    it('answers 200 for a signed notification, writes nothing to Redis and rings the bell', async () => {
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(res.json()).toEqual({ received: 1 });
+      expect(store.ops).toEqual([]);
+      expect(hubCalls).toHaveLength(1);
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=not_logged bells=1 delivered=1 failed=0 unknown_channel=0 dropped=0',
+      ]);
+    });
+
+    it('keeps the log of the events away: /ysocial/inbox/webhooks/events is a demo route', async () => {
+      // The route is behind the service token and the demo list, not this switch.
+      const res = await fetch(`${baseUrl}/ysocial/inbox/webhooks/events`);
+      expect(res.status).toBe(404);
     });
   });
 
@@ -489,7 +597,7 @@ describe('/ysocial-meta-webhook', () => {
         commentId: COMMENT,
       });
       expect(logLines).toEqual([
-        'meta webhook object=page events=1 fields=feed result=recorded',
+        'meta webhook object=page events=1 fields=feed result=recorded bells=1 delivered=1 failed=0 unknown_channel=0 dropped=0',
       ]);
     });
 
@@ -545,7 +653,7 @@ describe('/ysocial-meta-webhook', () => {
       expect(res.status).toBe(200);
       expect(res.json()).toEqual({ received: 1 });
       expect(logLines).toEqual([
-        'meta webhook object=page events=1 fields=feed result=store_failed error=Error',
+        'meta webhook object=page events=1 fields=feed result=store_failed error=Error bells=1 delivered=1 failed=0 unknown_channel=0 dropped=0',
       ]);
     });
 
@@ -688,6 +796,279 @@ describe('/ysocial-meta-webhook', () => {
       delete process.env[SECRET_ENV];
       await receive();
       expect(store.ops).toEqual([]);
+    });
+  });
+
+  // Phase 3, PR 74: the bell inbox.webhook to the hub for each comment.
+  describe('bells to the hub', () => {
+    const bellBodies = () => hubCalls.map((call) => JSON.parse(call.raw));
+    const DATA_KEYS = [
+      'object',
+      'entryId',
+      'field',
+      'item',
+      'verb',
+      'postId',
+      'commentId',
+      'parentId',
+      'mediaId',
+      'createdAt',
+      'sentAt',
+      'receivedAt',
+    ];
+
+    it('rings one bell for a signed Facebook comment, with ids and Idempotency-Key', async () => {
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(res.json()).toEqual({ received: 1 });
+      expect(channels.getChannelsForWebhook).toHaveBeenCalledWith(
+        'facebook',
+        PAGE
+      );
+      expect(hubCalls).toHaveLength(1);
+      const [call] = hubCalls;
+      const [bell] = bellBodies();
+      expect(call.url).toBe(`${HUB}/api/internal/events`);
+      expect(call.headers.authorization).toBe(`Bearer ${hubToken}`);
+      expect(call.headers['idempotency-key']).toBe(bell.id);
+      expect(bell).toMatchObject({
+        id: `inbox.webhook:int-fb-1:${COMMENT}.add.1795000100000`,
+        kind: 'inbox.webhook',
+        source: 'postiz',
+        subject: { type: 'channel', id: 'int-fb-1' },
+        postiz: {
+          organizationId: 'org-1',
+          integrationId: 'int-fb-1',
+          customerId: null,
+          providerIdentifier: 'facebook',
+        },
+      });
+      expect(Object.keys(bell.data).sort()).toEqual([...DATA_KEYS].sort());
+      expect(bell.data).toMatchObject({
+        object: 'page',
+        entryId: PAGE,
+        field: 'feed',
+        item: 'comment',
+        verb: 'add',
+        postId: POST,
+        commentId: COMMENT,
+      });
+      expect(call.raw).not.toMatch(/"(message|text|from)"/);
+      for (const secret of [COMMENT_TEXT, COMMENTER, COMMENTER_ID]) {
+        expect(call.raw).not.toContain(secret);
+      }
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=recorded bells=1 delivered=1 failed=0 unknown_channel=0 dropped=0',
+      ]);
+    });
+
+    it('rings one bell for a signed Instagram comment', async () => {
+      channels.getChannelsForWebhook.mockResolvedValue([
+        { ...channel('int-ig-1', 'org-1'), providerIdentifier: 'instagram' },
+      ]);
+      const res = await receive(instagramNotification());
+      expect(res.json()).toEqual({ received: 1 });
+      expect(channels.getChannelsForWebhook).toHaveBeenCalledWith(
+        'instagram',
+        '17840000000000001'
+      );
+      expect(hubCalls).toHaveLength(1);
+      const [bell] = bellBodies();
+      expect(bell.id).toBe(
+        'inbox.webhook:int-ig-1:17950000000000001.comments.1795000100000'
+      );
+      expect(hubCalls[0].headers['idempotency-key']).toBe(bell.id);
+      expect(Object.keys(bell.data).sort()).toEqual([...DATA_KEYS].sort());
+      expect(hubCalls[0].raw).not.toMatch(/"(message|text|from|username)"/);
+    });
+
+    it('rings one bell per channel, also of two organizations', async () => {
+      channels.getChannelsForWebhook.mockResolvedValue([
+        channel('int-fb-1', 'org-1'),
+        channel('int-fb-2', 'org-2'),
+      ]);
+      await receive();
+      expect(
+        bellBodies()
+          .map((bell) => bell.subject.id)
+          .sort()
+      ).toEqual(['int-fb-1', 'int-fb-2']);
+    });
+
+    it('rings once for the same notification delivered twice in one body', async () => {
+      const body = notification();
+      body.entry[0].changes.push(body.entry[0].changes[0]);
+      const res = await receive(body);
+      expect(res.json()).toEqual({ received: 2 });
+      expect(hubCalls).toHaveLength(1);
+    });
+
+    it.each([
+      ['a reaction', { item: 'reaction', verb: 'add' }],
+      ['a post', { item: 'status', verb: 'add' }],
+    ])('does not ring for %s', async (_name, value) => {
+      const body = notification();
+      Object.assign(body.entry[0].changes[0].value, value);
+      expect((await receive(body)).json()).toEqual({ received: 1 });
+      expect(hubCalls).toEqual([]);
+      expect(channels.getChannelsForWebhook).not.toHaveBeenCalled();
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=recorded bells=0',
+      ]);
+    });
+
+    it('does not ring for a user object, it is not even an event', async () => {
+      const res = await receive({
+        object: 'user',
+        entry: [
+          {
+            id: COMMENTER_ID,
+            time: 1_795_000_100,
+            changes: [{ field: 'feed', value: { item: 'comment' } }],
+          },
+        ],
+      });
+      expect(res.json()).toEqual({ received: 0 });
+      expect(hubCalls).toEqual([]);
+      expect(channels.getChannelsForWebhook).not.toHaveBeenCalled();
+    });
+
+    it('answers 200 and counts unknown_channel for a Page without a channel, no call to the hub', async () => {
+      channels.getChannelsForWebhook.mockResolvedValue([]);
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(res.json()).toEqual({ received: 1 });
+      expect(hubCalls).toEqual([]);
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=recorded bells=0 delivered=0 failed=0 unknown_channel=1 dropped=0',
+      ]);
+    });
+
+    it('rings no bell for an id longer than 300 characters', async () => {
+      channels.getChannelsForWebhook.mockResolvedValue([
+        channel('c'.repeat(300), 'org-1'),
+      ]);
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(hubCalls).toEqual([]);
+    });
+
+    it('answers 200 and logs bells=not_configured when the hub is not configured', async () => {
+      delete process.env[HUB_URL_ENV];
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(res.json()).toEqual({ received: 1 });
+      expect(hubCalls).toEqual([]);
+      expect(channels.getChannelsForWebhook).not.toHaveBeenCalled();
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=recorded bells=not_configured',
+      ]);
+    });
+
+    it('answers 200 and logs bells=failed with the class name when the repository throws', async () => {
+      class DatabaseDown extends Error {
+        name = 'PrismaClientInitializationError';
+      }
+      channels.getChannelsForWebhook.mockRejectedValue(
+        new DatabaseDown(COMMENT_TEXT)
+      );
+      const res = await receive();
+      expect(res.status).toBe(200);
+      expect(res.json()).toEqual({ received: 1 });
+      expect(logLines).toEqual([
+        'meta webhook object=page events=1 fields=feed result=recorded bells=failed error=PrismaClientInitializationError',
+      ]);
+    });
+
+    describe('when the hub does not answer (QA 4)', () => {
+      const expectOneFailedAttempt = async () => {
+        const res = await receive();
+        expect(res.status).toBe(200);
+        expect(res.json()).toEqual({ received: 1 });
+        expect(hubCalls).toHaveLength(1);
+        expect(logLines).toEqual([
+          'meta webhook object=page events=1 fields=feed result=recorded bells=1 delivered=0 failed=1 unknown_channel=0 dropped=0',
+        ]);
+      };
+
+      it('survives a hub that throws', async () => {
+        hubAnswer = async () => {
+          throw new TypeError(COMMENT_TEXT);
+        };
+        await expectOneFailedAttempt();
+      });
+
+      it('survives a hub that runs out of time', async () => {
+        hubAnswer = async () => {
+          const err = new Error('timeout');
+          err.name = 'TimeoutError';
+          throw err;
+        };
+        await expectOneFailedAttempt();
+      });
+
+      it.each([500, 503])('survives an answer %s', async (status) => {
+        hubAnswer = async () => ({ status });
+        await expectOneFailedAttempt();
+      });
+    });
+
+    describe('after a rejection (QA 2)', () => {
+      const nothingRung = () => {
+        expect(hubCalls).toEqual([]);
+        expect(channels.getChannelsForWebhook).not.toHaveBeenCalled();
+        expect(store.ops).toEqual([]);
+      };
+
+      it('answers 401 for a wrong signature and rings nobody', async () => {
+        const text = JSON.stringify(notification());
+        const res = await receive(notification(), {
+          signature: sign(text, randomBytes(24).toString('hex')),
+        });
+        expect(res.status).toBe(401);
+        nothingRung();
+      });
+
+      it('answers 401 for a missing signature and rings nobody', async () => {
+        expect(
+          (await receive(notification(), { signature: null })).status
+        ).toBe(401);
+        nothingRung();
+      });
+
+      it('answers 401 for a body that was changed after signing', async () => {
+        const body = JSON.stringify(notification());
+        const res = await receive(null, {
+          raw: body.replace('add', 'edi'),
+          signature: sign(body),
+        });
+        expect(res.status).toBe(401);
+        nothingRung();
+      });
+
+      it('answers 503 without FACEBOOK_APP_SECRET and rings nobody', async () => {
+        for (const secret of [undefined, '', '   ']) {
+          if (secret === undefined) {
+            delete process.env[SECRET_ENV];
+          } else {
+            process.env[SECRET_ENV] = secret;
+          }
+          const res = await receive(notification(), {
+            signature: sign(JSON.stringify(notification()), secret ?? ''),
+          });
+          expect(res.status).toBe(503);
+        }
+        nothingRung();
+      });
+
+      it('answers 401 for a signature with the verify token as secret and rings nobody', async () => {
+        const text = JSON.stringify(notification());
+        const res = await receive(notification(), {
+          signature: sign(text, verifyToken),
+        });
+        expect(res.status).toBe(401);
+        nothingRung();
+      });
     });
   });
 

@@ -12,6 +12,8 @@
  * tickets later (Phase 3).
  */
 
+import { inboxEventsEnabled } from '../webhooks/webhook.rules';
+
 export const YSOCIAL_DEMO_INTEGRATIONS_ENV = 'YSOCIAL_DEMO_INTEGRATIONS';
 // Phase 3, PR 73: the inbox routes for every active Facebook and Instagram
 // channel, not only the demo list. Only "true" switches it on (fail-closed).
@@ -38,6 +40,11 @@ export const inboxEnabled = (env: Env) =>
 // The inbox routes exist with the demo list or with the switch.
 export const inboxRoutesEnabled = (env: Env) =>
   inboxDemoEnabled(env) || inboxEnabled(env);
+
+// The routes that put our app on the Page of a channel: with the demo list,
+// or for every channel with YSOCIAL_INBOX_EVENTS=true (PR 74).
+export const inboxWebhookRoutesEnabled = (env: Env) =>
+  inboxDemoEnabled(env) || inboxEventsEnabled(env);
 
 // Postiz channel ids are cuids. Only an id of this form goes into a query
 // or the log.
