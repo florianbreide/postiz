@@ -423,7 +423,10 @@ Für Facebook hat die Antwort dieselbe Form mit `"provider": "facebook"`. Die Fe
 - Geschrieben wird nur auf einen Aufruf über die Route (Regel 2). Kein Workflow, kein Schedule, keine automatische Antwort. Der Hub prüft die Rolle der Person und schickt sie im Kopf mit.
 - Vor jeder schreibenden Aktion prüft die Route an der Plattform, ob der Kommentar unter einem Beitrag dieses Kontos steht. Sonst 404 `comment_not_found`, und nichts ändert sich.
   - Instagram: Feld `media` des Kommentars (bei einer Antwort ohne `media` über `parent_id` der Kommentar darüber), dann `owner` des Beitrags gleich `internalId` des Kanals.
-  - Facebook: Die Comment-Referenz von Meta nennt kein Feld, das vom Kommentar zu seinem Post führt, nur `parent` bei einer Antwort. Die Route liest deshalb dieselbe Liste wie die Leseroute und schreibt nur, wenn der Kommentar oder die Antwort darin steht: unter einem der letzten 10 Posts der Seite, unter den ersten 50 Kommentaren, bei Antworten auf der ersten Seite. Ältere Kommentare kann die Demo nicht ändern, sie zeigt sie auch nicht.
+  - Facebook: Die Comment-Referenz von Meta nennt kein Feld, das vom Kommentar zu seinem Post führt, nur `parent` bei einer Antwort. Ab 0.9.6 gibt es zwei Wege:
+    - Mit `?postId=` sucht die Route nur unter diesem Post. Vorher prüft sie, dass er der Seite gehört: Die ID beginnt mit `<Seiten-ID>_`, und `from.id` des Posts ist die Seite. Dann liest sie die Kommentare aller Ebenen des Posts (`filter=stream`), bis der Kommentar dabei ist. So geht es auch unter älteren Posts.
+    - Ohne `postId` liest sie die Posts der letzten 30 Tage, mindestens aber die letzten 10 Posts wie die Leseroute (bis 0.9.5 nur diese 10). Gefunden wird der Kommentar unter den ersten 50 Kommentaren eines Posts (bei mehr die neuesten 50) und bei Antworten auf der ersten Seite (bei mehr die neuesten 25).
+    - Eine neue Seite der Suche beginnt nur, solange die Dauer der letzten noch in 25 s passt, gezählt ab dem Beginn der Suche (mit `postId` ab der Prüfung des Posts). Reicht die Zeit nicht, 503 `ownership_unknown`, und nichts ändert sich. Vor dem Schreiben genügt mit `postId` der Fund unter dem Post, ohne weitere Aufrufe.
 - Löschen ohne `"confirmDelete": true` ergibt 409 `confirmation_required`, ohne Plattformaufruf.
 - Token: der Page-Token aus `Integration.token`, wie `comment()` und `analytics()` des Postiz-Providers. Bei Instagram ist das der erste Teil von `<Page-Token>___<User-Token>`, bei Facebook der ganze Wert. Er steht nur in der Anfrage an Meta (Adresse bei `GET` und `DELETE`, Body bei `POST`), nie in Log oder Antwort. Der Antworttext geht im Body an Meta, nicht in der Adresse. Den Aufruf an Meta machen beide Provider über `libraries/ysocial/src/inbox/meta.graph.ts`.
 
@@ -443,9 +446,10 @@ Für Facebook hat die Antwort dieselbe Form mit `"provider": "facebook"`. Die Fe
 | 502 | `platform_error` | Meta lehnt ab (beim Schreiben nur Antworten unter 500 mit lesbarem Body): `platformStatus`, `platformCode`, `platformSubcode` und `reason`, die Meldung von Meta, bereinigt wie `reason` bei Ereignissen. Beim Lesen und bei der Prüfung vor dem Schreiben auch eine Antwort 2xx ohne lesbaren Body (ab 0.9.4): `platformStatus` ist dann der Status, `reason` „Die Plattform hat keine lesbare Antwort geschickt.“ |
 | 500 | `internal_error` | Unerwarteter Fehler, etwa Datenbank oder Entschlüsselung des Tokens. Im Log nur der Name der Fehlerklasse, bei Prisma dazu der Code (`P1001` und so weiter). Als `HttpException` geht er nicht an den Sentry-Filter von Postiz, der den Body der Anfrage (den Antworttext) mitschicken würde |
 | 503 | `platform_unavailable` | Meta beim Lesen oder bei der Prüfung vor dem Schreiben nicht erreichbar oder keine Antwort nach 15 s, auch wenn bis dahin nur ein Teil des Bodys da ist (ab 0.9.4). Nichts geändert |
+| 503 | `ownership_unknown` | Ab 0.9.6: Die Suche nach dem Kommentar vor dem Schreiben oder für das Gespräch brauchte länger als 25 s. Ob er zum Kanal gehört, ist offen. Nichts geändert. Mit `?postId=` kommt das kaum vor |
 | 503 | `outcome_unknown` | Keine klare Antwort von Meta auf das Schreiben selbst: Netzfehler, 15 s ohne Antwort, ein Fehler 5xx von Meta (im Log dann mit Status und Codes) oder ab 0.9.4 eine Antwort 2xx ohne lesbaren Body (im Log `body=unreadable`). Lesbar ist nur ein JSON-Objekt, also nicht ein leerer Body (204), HTML, ein abgeschnittener Body oder ein bloßes `true`. Läuft die Frist von 15 s ab, während der Body ankommt, zählt das wie keine Antwort, beim Schreiben also auch `outcome_unknown`. Meta hat es vielleicht trotzdem getan. Der Hub wiederholt den Aufruf nicht von selbst, sondern lädt die Kommentare neu und zeigt den Stand |
 
-Dauer: Jede Anfrage an Meta bricht nach 15 s ab. Lesen braucht 1 Anfrage für die Beiträge und bis zu 10 parallel für die Kommentare, also höchstens etwa 30 s. Schreiben macht bei Instagram bis zu 4 Anfragen nacheinander (Kommentar, Kommentar darüber, Beitrag, Schreiben), also höchstens etwa 60 s. Bei Facebook liest es erst die Liste wie die Leseroute (bis zu 11 Anfragen, etwa 30 s) und schreibt dann, also höchstens etwa 45 s. Der Hub wartet mindestens 60 s. Bricht er vorher ab, läuft das Schreiben im Fork trotzdem weiter.
+Dauer: Jede Anfrage an Meta bricht nach 15 s ab. Lesen braucht 1 Anfrage für die Beiträge und bis zu 10 parallel für die Kommentare, also höchstens etwa 30 s. Schreiben macht bei Instagram bis zu 4 Anfragen nacheinander (Kommentar, Kommentar darüber, Beitrag, Schreiben), also höchstens etwa 60 s. Bei Facebook sucht es den Kommentar erst wie oben. Eine neue Seite der Suche beginnt nur, wenn die Dauer der letzten noch in 25 s passt. Danach schreibt es, also meist unter 45 s. Der Hub wartet 65 s. Bricht er vorher ab, läuft das Schreiben im Fork trotzdem weiter.
 
 Im Log steht je Aufruf nur, was eine Prüfung bestanden hat, die Person und Zahlen: `inbox comments channel=<id> result=ok posts=<n> comments=<n>` und `inbox <reply|hide|unhide|delete> channel=<id> comment=<commentId> actor=<X-Ysocial-Actor> result=<done|rejected code=…>`. Bei `platform_error` stehen dort Status und Codes von Meta, nie ihre Meldung, bei einer Antwort ohne lesbaren Body dazu `body=unreadable`. Kommentartext, Namen der Kommentierenden und Antworttext stehen nie im Log. Eine Kanal-ID, die nicht in der Liste steht, und eine ungültige Kommentar-ID stehen dort als `-`.
 
@@ -487,11 +491,92 @@ Der Postiz-Provider `instagram` fragt alle diese Rechte schon an (`instagram.pro
 - `message`, `from` und `created_time` am Kommentar belegt der Leitfaden „Comments and @mentions“ der Pages API. `is_hidden` nennt die aktuelle Comment-Referenz nur als Parameter zum Ändern, nicht in der Feldliste. Lehnt Meta das Feld beim Lesen ab, endet die Leseroute mit 502 `platform_error` und Code 100, und ebenso jede schreibende Route, weil die Prüfung vor dem Schreiben dieselbe Liste liest. Dann ändert sich nichts, aber die ganze Facebook-Demo steht. **Ungeprüft**, auf Staging als erstes prüfen, vor jedem Schreiben (PR-QA).
 - Ob verborgene Kommentare in der Liste stehen, sagt die Doku nicht. Fehlen sie, kann die Demo einen verborgenen Kommentar nicht wieder zeigen (404 `comment_not_found`, nichts geändert). **Ungeprüft**, auf Staging prüfen.
 - Antwort auf eine Antwort: Die Route lässt auch die ID einer Antwort aus der Liste zu und schickt dann `POST /{antwort-id}/comments`. Was Meta damit macht (ablehnen oder an den Kommentar darüber hängen), sagt die Referenz nicht, sie nennt nur das Feld `can_comment`. **Ungeprüft**. Die Demo-Seite im Hub bietet Aktionen nur an Kommentaren der obersten Ebene (INBOX-KONZEPT §7, Punkt 4).
-- Je Kommentar liest die Demo nur die erste Seite der Antworten in der Standardgröße von Meta. Antworten danach und Kommentare ab Platz 51 zeigt sie nicht und kann sie nicht ändern (404 `comment_not_found`).
+- Je Kommentar liest die Demo eine Seite Antworten (25), ab 0.9.6 bei mehr die neuesten 25, wie die Prüfung vor dem Schreiben. Ältere Antworten und Kommentare ab Platz 51 zeigt sie nicht. Ohne `postId` kann sie sie nicht ändern (404 `comment_not_found`).
 - Scheitert der Abruf der Kommentare eines einzigen Posts, etwa weil er gerade gelöscht wurde, scheitert die ganze Liste. Bis zum nächsten erfolgreichen Abruf sind dann auch alle schreibenden Routen des Kanals gesperrt (fail-closed).
 - Ob `from.name` bei Personen ohne Rolle in der App mit Standard Access kommt, ist **ungeprüft** (`meta.md` 4, „Business Asset User Profile Access“). Fehlt es, steht `username` auf `null`.
 - `order=reverse_chronological` steht in der Referenz als Wert von `summary.order`. Ohne Wirkung kämen die ältesten 50 Kommentare. Für die Aufnahmen mit wenigen Kommentaren spielt das keine Rolle.
 - Ohne Posttext wie bei Instagram. Den Bezug zum Post zeigt der Link `permalink`.
+
+## Inbox für alle Meta-Kanäle (Backend, ab 0.9.6, Phase 3 PR 73)
+
+Der Hub ruft je Kanal ab und speichert, der Fork liest und schreibt nur bei Meta (E81). Er speichert nichts und meldet nichts von selbst. Die Routen sind dieselben wie bei der Inbox-Demo, dazu kommen die neuen unten. Logik in `libraries/ysocial/src/inbox/`.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_INBOX_ENABLED` | `true`: Die Inbox-Routen gelten für jeden aktiven Kanal `facebook` und `instagram`, nicht nur für `YSOCIAL_DEMO_INTEGRATIONS`. Jeder andere Wert und eine fehlende Variable: nur die Demo-Liste, ohne sie 404, wie bis 0.9.5. Die Prüfung vor dem Schreiben bei Facebook liest dabei zusätzlich die Posts der letzten 30 Tage (Inbox-Demo, „Regeln“). Einschalten nur mit Florians OK im PR. Auf Kundenseiten vor dem bestandenen App Review zusätzlich B76 |
+
+- Ohne Demo-Liste und ohne Schalter gibt es die Routen nicht (404, `YsocialInboxGuard`, vor der Token-Prüfung). Mit Schalter darf jede Route jeden aktiven Kanal mit Inbox. Ein Kanal anderer Plattformen antwortet 409 `provider_not_supported`, eine ID, die keine Postiz-ID ist, 404 `not_found`.
+- Die Webhook-Routen (`…/webhooks`, `/webhooks/events`) bleiben bei der Demo-Liste (`InboxDemoOnly`). Ohne Demo-Liste antworten sie auch mit Schalter 404, vor der Token-Prüfung. Für alle Kanäle kommen sie mit PR 74.
+- Vor jedem Schreiben bleibt die Prüfung, ob der Kommentar unter einem Post dieses Kanals steht.
+- Die Routen eines Kommentars (Gespräch, Antworten, Verbergen, Wieder zeigen, Löschen, Liken) nehmen `?postId=<postId>`, die `postId` des Eintrags aus `items`. Facebook sucht den Kommentar dann nur unter diesem Post, nach der Prüfung, dass er der Seite gehört. Das geht auch unter Posts, die älter als 30 Tage sind (E92, Entscheidung 17.11.2026, Variante A). Ohne `postId` sucht es in den Posts der letzten 30 Tage, mindestens aber in den letzten 10. Ein Kommentar unter einem älteren Post endet dann mit 404 `comment_not_found`. Instagram braucht `postId` nicht, die Route nimmt es an und ignoriert es.
+
+| Route | Wirkung |
+|---|---|
+| `GET /ysocial/inbox/integrations/:id/capabilities` | `{"integrationId","provider","capabilities":{"reply","hide","delete","like","realtime"}}`. Facebook: alles `true` außer `realtime`. Instagram: `like: false`, Instagram hat keinen Endpunkt dafür (W69). `realtime` ist `false`, bis PR 74 Webhooks für alle Kanäle bringt. Kein Aufruf bei Meta |
+| `GET /ysocial/inbox/integrations/:id/items?since=&olderThan=&postsAfter=&cursor=` | Kommentare und Antworten der Posts im Fenster, unten |
+| `GET /ysocial/inbox/integrations/:id/comments/:commentId?postId=` | Ein Kommentar mit seinem Gespräch: der Kommentar der obersten Ebene und seine Antworten, für die Klingel (PR 74) und zum Nachladen. Ist der angefragte Kommentar eine Antwort, die auf der gelesenen Seite der Antworten fehlt, steht er einzeln dabei. Ein Kommentar unter einem fremden Post ergibt 404 `comment_not_found` |
+| `POST /ysocial/inbox/integrations/:id/comments/:commentId/like?postId=` | Als Seite liken, nur Facebook. Mit `X-Ysocial-Actor`. 200 `{"integrationId","commentId","liked":true}` |
+| `DELETE /ysocial/inbox/integrations/:id/comments/:commentId/like?postId=` | Like der Seite zurücknehmen, nur Facebook. 200 `{…,"liked":false}` |
+
+**Fenster und Cursor (E82):**
+- Ohne `olderThan` gehören die Posts der letzten 30 Tage zum Fenster. Mit `olderThan` sind es die Posts, die vor diesem Zeitpunkt erstellt wurden, und mit `postsAfter` nur die ab diesem Zeitpunkt. Das ist der stündliche Lauf über ältere Posts. Mit `postsAfter` kann der Hub ihn begrenzen, etwa auf 24 Monate (E91). Ohne `postsAfter` liest er die ganze Geschichte des Kanals.
+- `since` begrenzt auf Kommentare und Antworten, deren Zeit ab `since` liegt. Ohne `since` kommen alle.
+- Alle Zeiten in ISO 8601 mit Datum und Uhrzeit (`2026-11-17T09:00:00Z`). Ein reines Datum, eine Wochen- oder Ordinalform ergibt 400.
+- Eine Antwort liest so viele Seiten von Meta, wie in 25 s passen. Eine neue Seite beginnt nur, wenn die Dauer der letzten noch hineinpasst, die erste läuft immer (nginx wartet 60 s, der Hub 35 s). Eine Seite sind 10 Posts bei Facebook (mit ihren Kommentaren und Antworten in einem Aufruf) und 10 Medien bei Instagram. Liegt noch etwas im Fenster, steht in `nextCursor` der Cursor von Meta. Der nächste Aufruf mit denselben `since`, `olderThan`, `postsAfter` und `cursor=<nextCursor>` liest weiter. `null` heißt: Fenster zu Ende. Meta sagt „Speichere keine Cursor“, der Hub nutzt ihn sofort. Kommt ein Cursor ein zweites Mal oder eine Seite ohne Posts, endet das Lesen.
+
+Antwort:
+
+    {
+      "integrationId": "…", "provider": "instagram", "fetchedAt": "…",
+      "since": "…", "postsFrom": "…", "postsBefore": null,
+      "posts": [{ "id": "…", "permalink": "https://…", "timestamp": "…", "mediaType": "…", "commentsCount": 3, "truncated": false }],
+      "items": [{ "id": "…", "postId": "…", "parentId": null, "text": "…", "username": "…", "timestamp": "…", "likeCount": 0, "hidden": false, "fromOwner": false }],
+      "nextCursor": null,
+      "usage": { "percent": 12, "regainMinutes": 0 }
+    }
+
+- `items` ist flach. `parentId` ist der Kommentar der obersten Ebene einer Antwort und `null` für einen Kommentar der obersten Ebene, also einem Ticket (E83).
+- `fromOwner: true`: Die Seite oder das Konto des Kanals hat den Eintrag geschrieben, auch aus Business Suite oder einem anderen Werkzeug. Daran erkennt der Hub „außerhalb geantwortet“ (E83) und legt für einen eigenen Kommentar kein Ticket an. Nach außen geht nur dieses Flag, nie die ID der Person. Facebook: `from.id` gleich der Seiten-ID. Instagram: Feld `user` gleich dem Konto des Kanals, laut Referenz „only returned if the app user created the IG Comment“. Beides **ungeprüft**, auf Staging prüfen (QA).
+- `username`: Facebook `from.name` (Anzeigename der Person oder Seite), Instagram `username` (Handle). Kann `null` sein.
+- `timestamp` ist `null`, wenn Meta keine lesbare Zeit schickt. Laut Referenz kommt die Zeit immer, ein Eintrag ohne sie fällt nie aus `since` und kommt bei jedem Abruf wieder. Der Hub nimmt dann `fetchedAt`.
+- `posts` nennt jeden gelesenen Post des Fensters, auch ohne neue Einträge, für Link und Zuordnung.
+- `commentsCount`: Instagram `comments_count` von Meta, Antworten eingeschlossen. Facebook `null`, ein Seitenpost hat kein solches Feld.
+- `truncated: true`: Ein Post hat mehr Kommentare der obersten Ebene als eine Seite (50) oder ein Kommentar mehr Antworten als eine Seite (25). Gelesen werden dann die neuesten, die älteren fehlen. Beim Gespräch (`…/comments/:commentId`) gilt `truncated` für die Antworten dieses Gesprächs.
+- `usage` stammt aus dem Kopf `x-business-use-case-usage` der Antworten von Meta. Es ist der höchste Prozentwert aus `call_count`, `total_cputime` und `total_time` und die größte Zahl aus `estimated_time_to_regain_access` in Minuten. `null` heißt, Meta hat keinen Kopf geschickt. Der Hub drosselt ab 80 % (PR 78). Die Business-ID bleibt draußen. Auch die Fehler 502 und 503 der Leserouten tragen `usage`, sobald Meta einen Kopf geschickt hat, etwa bei einem Rate-Limit.
+
+**Für den Hub (PR 77, 78):**
+- `since` am besten auf `fetchedAt` des ersten Aufrufs einer Lesung setzen, minus ein paar Minuten Puffer: Meta zeigt Kommentare verzögert, und bei mehreren Cursor-Aufrufen hat jeder sein eigenes `fetchedAt`. Doppelte Einträge über die `id` entfernen.
+- `since` liefert nur neue Kommentare, keine geänderten. Eine Änderung an einem älteren Kommentar (verborgen, bearbeitet, gelöscht) sieht der Hub erst beim Lesen ohne `since` oder beim Nachladen eines Gesprächs.
+- „Bei der Plattform gelöscht“ (E84) folgt nur aus einem vollständigen Lesen ohne `since` mit `truncated: false` für den Post, in dem der Eintrag fehlt. 404 `comment_not_found` unterscheidet nicht zwischen gelöscht, fremd und außerhalb des Fensters.
+
+**Wie gelesen wird** (offizielle Doku, gelesen am 17.11.2026, Links im Kopf von `facebook.inbox.ts` und `instagram.inbox.ts`):
+- Facebook: `GET /{page-id}/published_posts` mit verschachtelten Kommentaren und Antworten in einem Aufruf je 10 Posts (`fields=…,comments.limit(50){…,comments.limit(25){…}}`, Field Expansion). Verschachtelt sind nur `.limit()` und `.after()` dokumentiert, die Kommentare und Antworten kommen dort älteste zuerst. Hat ein Post mehr als 50 Kommentare, liest der Fork dessen neueste 50 einzeln nach (`filter=toplevel&order=reverse_chronological`, wie die Demo). Hat ein Kommentar mehr als 25 Antworten, ebenso dessen neueste 25. Das Nachlesen läuft je Seite parallel. `published_posts` nimmt laut Referenz keine Parameter, also kein `since`, und liefert die Posts „in einer Rangfolge sortiert“. Der Fork überspringt deshalb einen älteren Post unterwegs (angeheftet oder hoch gerankt) und hört erst nach einer Seite auf, deren Posts alle vor dem Fenster liegen.
+- Facebook mit `postId`: `GET /{postId}?fields=…,from`, dann `GET /{postId}/comments?filter=stream&order=reverse_chronological&fields=id,parent{id}&limit=100` seitenweise, bis der Kommentar dabei ist. Für das Gespräch danach `GET /{Kommentar der obersten Ebene}` mit seinen Antworten. Nennt dieser selbst noch einen `parent`, geht der Fork höchstens zweimal nach oben (ob Meta Antworten auf Antworten so verschachtelt, ist **ungeprüft**). Vor einem Schreiben entfällt das Gespräch.
+- Facebook liest die neuesten Antworten langer Threads je Post höchstens 5 auf einmal, die Posts einer Seite nebeneinander.
+- Instagram: `GET /{ig-user-id}/media` („the most recently created media“), je 10, neueste zuerst. Das erste ältere Medium beendet das Fenster. Die Kommentare eines Mediums lassen sich nicht verschachteln (keine öffentliche Kante) und nicht nach Zeit filtern, also ein Aufruf je Medium mit Kommentaren, höchstens 50, neueste zuerst, mit `replies`.
+
+**Log**, nie Text oder Name:
+- `inbox items channel=<id> result=ok posts=<n> items=<n> next=<yes|no> usage=<Prozent>`
+- `inbox comment channel=<id> comment=<id> result=ok items=<n>`
+- `inbox capabilities channel=<id> result=ok`
+- `inbox like|unlike channel=<id> comment=<id> actor=<…> result=done`
+- Abweisungen mit Codes wie bei der Demo, bei Fehlern von Meta dazu `usage=<Prozent>`, wenn Meta einen Kopf geschickt hat.
+
+Abweisungen wie bei der Demo, dazu:
+- 409 `action_not_supported` mit `provider` für Liken bei Instagram, ohne Aufruf bei Meta.
+- 503 `ownership_unknown`, wenn die Suche nach dem Kommentar länger als 25 s dauert.
+- 400 bei `since`, `olderThan` oder `postsAfter` ohne Datum und Uhrzeit, bei einem ungültigen `cursor` und bei einer `postId` mit anderen Zeichen als Ziffern und `_`.
+- Der Plan nennt in QA 2 von PR 73 „403 für fremden Kommentar“. Der Code antwortet wie die Demo mit 404 `comment_not_found`. Der Plan wird angepasst.
+
+**Grenzen und Ungeprüftes**
+- **Lesetest B63 offen** (PLAN Phase 3, R61): ob Meta mit Standard Access Kommentare von Personen ohne App-Rolle liefert. Florian bzw. der Koordinator prüft auf Staging mit `curl` im Docker-Netz, je Kommentar nur `hasMessage` und `hasFrom`. Das Ergebnis kommt in den PR und die ROADMAP.
+- `fromOwner` bei Facebook und Instagram **ungeprüft** (oben). Liefert Meta das Feld nicht wie erwartet, steht dort immer `false`. Dann behandelt der Hub eigene Antworten wie fremde, wie vor 0.9.6.
+- `order=reverse_chronological` als Parameter der Kante `comments` beschreibt die Referenz nur unter `summary` (wie bei der Demo). Wirkt es nicht, kommen bei Posts mit mehr als 50 Kommentaren die ältesten 50 und bei Kommentaren mit mehr als 25 Antworten die ältesten 25. Dann steht `truncated: true` dabei, und neue Einträge dort erreichen den Hub nicht. Auf Staging prüfen.
+- Besitz bei Facebook ohne `postId`: Gefunden wird nur, was die Suche in den Posts der letzten 30 Tage und den letzten 10 Posts sieht, also nicht eine Antwort jenseits der neuesten 25 eines Kommentars. Mit `postId` findet sie jeden Kommentar des Posts, solange die 25 s reichen.
+- Laufzeit: Die erste Seite läuft immer. Ein Aufruf an Meta darf 15 s dauern. Bei Facebook folgen auf den Aufruf einer Seite das Nachlesen der Kommentare und das der Antworten, jeweils nebeneinander. Eine einzelne Seite kann also bis etwa 45 s brauchen, in der Regel wenige Sekunden. Die Grenze von 25 s gilt für den Beginn weiterer Seiten.
+- Last: Das Fenster endet erst nach einer Seite, deren Posts alle älter sind. Jeder Abruf liest also mindestens eine Seite außerhalb des Fensters, mit ihren Kommentaren und Antworten. Billiger wäre, erst die Posts allein zu lesen und die Kommentare der Posts im Fenster gesammelt über `GET /?ids=…` (Review PR 73, Befund C). Nicht gebaut, erst wenn `usage` auf Staging oder Prod es nahelegt.
+- Liken: Die Seite muss den Kommentar liken können, laut Meta mit der Aufgabe CREATE_CONTENT, das Zurücknehmen mit MODERATE.
+- Instagram ohne `comments_count` (0) wird ohne Aufruf übersprungen, wie bei der Demo.
 
 ## Webhooks für die Inbox-Demo (Backend, ab 0.9.1, nur Staging)
 
