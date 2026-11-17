@@ -8,6 +8,7 @@ import { YsocialMetaWebhookController } from './ysocial.meta.webhook.controller'
 import { YsocialTokenGuard } from './ysocial.token.guard';
 import { YsocialTestRoutesGuard } from './ysocial.test.routes.guard';
 import { YsocialInboxDemoGuard } from './ysocial.inbox.demo.guard';
+import { YsocialInboxGuard } from './ysocial.inbox.guard';
 import { YsocialMetaWebhookGuard } from './ysocial.meta.webhook.guard';
 import { YsocialStatusService } from './ysocial.status.service';
 import { YsocialReadService } from '../../../../libraries/ysocial/src/read/ysocial.read.service';
@@ -39,6 +40,7 @@ import { ysocialTokenKeyCheckProvider } from '../../../../libraries/ysocial/src/
     YsocialTokenGuard,
     YsocialTestRoutesGuard,
     YsocialInboxDemoGuard,
+    YsocialInboxGuard,
     YsocialMetaWebhookGuard,
     YsocialStatusService,
     YsocialReadService,

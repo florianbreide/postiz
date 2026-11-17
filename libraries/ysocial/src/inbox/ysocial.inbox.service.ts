@@ -8,10 +8,17 @@ import { YsocialInboxRepository } from '../database/ysocial.inbox.repository';
 import { channelFlag, ChannelRow } from '../health/channel.health';
 import { parseActor } from '../retry/retry.rules';
 import {
+  InboxCapabilities,
   InboxChannel,
+  InboxItemsQuery,
+  InboxOwnershipUnknownError,
   InboxPlatformError,
   InboxPost,
+  InboxUsageMeter,
+  inboxEnabled,
+  inboxWindow,
   isDemoIntegration,
+  isIntegrationId,
   isPlatformId,
   YSOCIAL_DEMO_INTEGRATIONS_ENV,
   YsocialInboxProvider,
@@ -21,6 +28,24 @@ import { FacebookInbox } from './facebook.inbox';
 
 type Rejection = { status: number; code: string; [field: string]: unknown };
 type Log = (result: string) => void;
+
+// demo: only channels of YSOCIAL_DEMO_INTEGRATIONS (webhooks of the demo).
+// inbox: those, and with YSOCIAL_INBOX_ENABLED=true every channel (PR 73).
+type Scope = 'demo' | 'inbox';
+
+const allowedFor = (integrationId: string, scope: Scope) =>
+  isDemoIntegration(process.env, integrationId) ||
+  (scope === 'inbox' &&
+    inboxEnabled(process.env) &&
+    isIntegrationId(integrationId));
+
+const usageLog = (usage?: InboxUsageMeter) =>
+  usage?.usage ? ` usage=${usage.usage.percent}` : '';
+
+// The post of a comment as the hub knows it from items: a hint for the
+// search, the provider checks it (PR 73, E92). Only a valid id counts.
+const hintOf = (postId: string | undefined) =>
+  isPlatformId(postId) ? postId : null;
 
 const rejection = ({ status, ...body }: Rejection) =>
   new HttpException({ statusCode: status, ...body }, status);
@@ -80,7 +105,7 @@ export class YsocialInboxService {
   constructor(private _inbox: YsocialInboxRepository) {}
 
   async getComments(integrationId: string) {
-    const listed = isDemoIntegration(process.env, integrationId);
+    const listed = allowedFor(integrationId, 'inbox');
     const log: Log = (result) =>
       this._logger.log(
         `inbox comments channel=${
@@ -111,7 +136,8 @@ export class YsocialInboxService {
     integrationId: string,
     commentId: string,
     actorHeader: string | undefined,
-    message: string
+    message: string,
+    postId?: string
   ) {
     return this.write(
       'reply',
@@ -121,7 +147,8 @@ export class YsocialInboxService {
       async (provider, channel) => {
         const { id } = await provider.reply(channel, commentId, message);
         return { integrationId, commentId, replyId: id };
-      }
+      },
+      { postId }
     );
   }
 
@@ -129,7 +156,8 @@ export class YsocialInboxService {
     integrationId: string,
     commentId: string,
     actorHeader: string | undefined,
-    hide: boolean
+    hide: boolean,
+    postId?: string
   ) {
     return this.write(
       hide ? 'hide' : 'unhide',
@@ -139,7 +167,8 @@ export class YsocialInboxService {
       async (provider, channel) => {
         await provider.hide(channel, commentId, hide);
         return { integrationId, commentId, hidden: hide };
-      }
+      },
+      { postId }
     );
   }
 
@@ -147,7 +176,8 @@ export class YsocialInboxService {
     integrationId: string,
     commentId: string,
     actorHeader: string | undefined,
-    confirmDelete: boolean
+    confirmDelete: boolean,
+    postId?: string
   ) {
     return this.write(
       'delete',
@@ -158,14 +188,144 @@ export class YsocialInboxService {
         await provider.remove(channel, commentId);
         return { integrationId, commentId, deleted: true };
       },
-      confirmDelete
+      { postId, confirmed: confirmDelete }
     );
   }
 
+  // Like or unlike as the Page (PR 73). Only where the platform has it
+  // (capabilities.like, Facebook), otherwise 409 action_not_supported.
+  like(
+    integrationId: string,
+    commentId: string,
+    actorHeader: string | undefined,
+    like: boolean,
+    postId?: string
+  ) {
+    return this.write(
+      like ? 'like' : 'unlike',
+      integrationId,
+      commentId,
+      actorHeader,
+      async (provider, channel) => {
+        await provider.like(channel, commentId, like);
+        return { integrationId, commentId, liked: like };
+      },
+      { postId, capability: 'like' }
+    );
+  }
+
+  // What the platform of the channel allows (E84, W69). No platform call.
+  async getCapabilities(integrationId: string) {
+    const listed = allowedFor(integrationId, 'inbox');
+    const log: Log = (result) =>
+      this._logger.log(
+        `inbox capabilities channel=${
+          listed ? integrationId : '-'
+        } result=${result}`
+      );
+
+    return this.guarded(log, async () => {
+      const { provider } = await this.channelFor(integrationId, listed, log);
+      log('ok');
+      return {
+        integrationId,
+        provider: provider.identifier,
+        capabilities: provider.capabilities,
+      };
+    });
+  }
+
+  // Comments and replies of the posts in the window since a time (PR 73,
+  // E82). One page per call, nextCursor continues it.
+  async getItems(integrationId: string, query: InboxItemsQuery) {
+    const listed = allowedFor(integrationId, 'inbox');
+    const log: Log = (result) =>
+      this._logger.log(
+        `inbox items channel=${listed ? integrationId : '-'} result=${result}`
+      );
+
+    return this.guarded(log, async () => {
+      const { provider, channel } = await this.channelFor(
+        integrationId,
+        listed,
+        log
+      );
+      const now = new Date();
+      const window = inboxWindow(query, now);
+      const usage = new InboxUsageMeter();
+      const page = await this.platform(
+        log,
+        () => provider.listItems(channel, window, usage),
+        false,
+        usage
+      );
+      log(
+        `ok posts=${page.posts.length} items=${page.items.length} next=${
+          page.nextCursor ? 'yes' : 'no'
+        }${usageLog(usage)}`
+      );
+      return {
+        integrationId,
+        provider: provider.identifier,
+        fetchedAt: now.toISOString(),
+        since: window.since?.toISOString() ?? null,
+        postsFrom: window.postsFrom?.toISOString() ?? null,
+        postsBefore: window.postsBefore?.toISOString() ?? null,
+        ...page,
+        usage: usage.usage,
+      };
+    });
+  }
+
+  // One comment of this channel with its conversation (PR 73): for the
+  // webhook bell and for reloading a ticket. A comment of another account
+  // is 404 comment_not_found, as for a write. postId: see hintOf.
+  async getComment(integrationId: string, commentId: string, postId?: string) {
+    const listed = allowedFor(integrationId, 'inbox');
+    const validComment = isPlatformId(commentId);
+    const log: Log = (result) =>
+      this._logger.log(
+        `inbox comment channel=${listed ? integrationId : '-'} comment=${
+          validComment ? commentId : '-'
+        } result=${result}`
+      );
+
+    return this.guarded(log, async () => {
+      const { provider, channel } = await this.channelFor(
+        integrationId,
+        listed,
+        log,
+        () =>
+          validComment ? undefined : { status: 400, code: 'invalid_comment_id' }
+      );
+      const usage = new InboxUsageMeter();
+      const conversation = await this.platform(
+        log,
+        () =>
+          provider.getConversation(channel, commentId, usage, hintOf(postId)),
+        false,
+        usage
+      );
+      if (!conversation) {
+        log('rejected code=comment_not_found');
+        throw rejection({ status: 404, code: 'comment_not_found' });
+      }
+      log(`ok items=${conversation.items.length}${usageLog(usage)}`);
+      return {
+        integrationId,
+        provider: provider.identifier,
+        fetchedAt: new Date().toISOString(),
+        commentId,
+        ...conversation,
+        usage: usage.usage,
+      };
+    });
+  }
+
   // Whether our app is on the Page of the channel, with which Page fields
-  // (PR B). Read only.
+  // (PR B). Read only. Only for the demo list, every channel with PR 74.
   async getWebhooks(integrationId: string) {
-    const listed = isDemoIntegration(process.env, integrationId);
+    const listed = allowedFor(integrationId, 'demo');
     const log: Log = (result) =>
       this._logger.log(
         `inbox webhooks channel=${
@@ -208,19 +368,32 @@ export class YsocialInboxService {
           subscribed: true,
           fields,
         };
-      }
+      },
+      { scope: 'demo' }
     );
   }
 
   // commentId null: a write on the channel itself, without a comment and
-  // without the ownership check of a comment.
+  // without the ownership check of a comment. capability: the write needs
+  // this capability of the platform, checked before any platform call.
+  // postId: see hintOf.
   private async write<T>(
     action: string,
     integrationId: string,
     commentId: string | null,
     actorHeader: string | undefined,
     run: (provider: YsocialInboxProvider, channel: InboxChannel) => Promise<T>,
-    confirmed = true
+    {
+      confirmed = true,
+      capability,
+      scope = 'inbox',
+      postId,
+    }: {
+      confirmed?: boolean;
+      capability?: keyof InboxCapabilities;
+      scope?: Scope;
+      postId?: string;
+    } = {}
   ): Promise<T> {
     const actor = parseActor(actorHeader);
     if (!actor) {
@@ -232,7 +405,7 @@ export class YsocialInboxService {
     }
 
     // Only ids that passed a check go into the log, never a raw path.
-    const listed = isDemoIntegration(process.env, integrationId);
+    const listed = allowedFor(integrationId, scope);
     const validComment = commentId === null || isPlatformId(commentId);
     const comment =
       commentId === null ? '' : ` comment=${validComment ? commentId : '-'}`;
@@ -259,9 +432,18 @@ export class YsocialInboxService {
         }
       );
 
+      if (capability && !provider.capabilities[capability]) {
+        log('rejected code=action_not_supported');
+        throw rejection({
+          status: 409,
+          code: 'action_not_supported',
+          provider: provider.identifier,
+        });
+      }
+
       if (commentId !== null) {
         const owned = await this.platform(log, () =>
-          provider.ownsComment(channel, commentId)
+          provider.ownsComment(channel, commentId, hintOf(postId))
         );
         if (!owned) {
           log('rejected code=comment_not_found');
@@ -292,7 +474,12 @@ export class YsocialInboxService {
       return rejection(body);
     };
 
+    // Not listed and no inbox switch (or the webhook routes of the demo).
+    // With the switch an id that is no Postiz id gets here as well.
     if (!listed) {
+      if (inboxEnabled(process.env) && !isIntegrationId(integrationId)) {
+        throw reject({ status: 404, code: 'not_found' });
+      }
       throw reject({
         status: 403,
         code: 'not_demo_integration',
@@ -334,18 +521,30 @@ export class YsocialInboxService {
   // gets the codes only. Without a clear answer to the write itself
   // (network error, timeout, a 5xx of Meta, a 2xx without a readable body)
   // the outcome is unknown: Meta may have done it. Then 503 outcome_unknown,
-  // and the hub reloads the comments instead of repeating the call.
+  // and the hub reloads the comments instead of repeating the call. A search
+  // for a comment that ran out of time is 503 ownership_unknown, nothing
+  // written. usage: the load at Meta so far, also on an error (a rate limit).
   private async platform<T>(
     log: Log,
     call: () => Promise<T>,
-    writing = false
+    writing = false,
+    usage?: InboxUsageMeter
   ): Promise<T> {
     try {
       return await call();
     } catch (err) {
+      if (err instanceof InboxOwnershipUnknownError) {
+        log(`rejected code=ownership_unknown${usageLog(usage)}`);
+        throw rejection({
+          status: 503,
+          code: 'ownership_unknown',
+          ...(usage?.usage ? { usage: usage.usage } : {}),
+        });
+      }
       if (!(err instanceof InboxPlatformError)) {
         throw err;
       }
+      const load = usage?.usage ? { usage: usage.usage } : {};
       const { unavailable, unreadable, status, code, subcode, reason } =
         err.details;
       const body = unreadable ? ' body=unreadable' : '';
@@ -362,13 +561,13 @@ export class YsocialInboxService {
         throw rejection({ status: 503, code: 'outcome_unknown' });
       }
       if (unavailable) {
-        log('rejected code=platform_unavailable');
-        throw rejection({ status: 503, code: 'platform_unavailable' });
+        log(`rejected code=platform_unavailable${usageLog(usage)}`);
+        throw rejection({ status: 503, code: 'platform_unavailable', ...load });
       }
       log(
         `rejected code=platform_error status=${status ?? '-'} platform=${
           code ?? '-'
-        }/${subcode ?? '-'}${body}`
+        }/${subcode ?? '-'}${body}${usageLog(usage)}`
       );
       throw rejection({
         status: 502,
@@ -377,6 +576,7 @@ export class YsocialInboxService {
         platformCode: code ?? null,
         platformSubcode: subcode ?? null,
         reason: reason || null,
+        ...load,
       });
     }
   }

@@ -100,11 +100,49 @@ type GraphCall = { method: string; url: URL; body: URLSearchParams | null };
 const graphCalls: GraphCall[] = [];
 let graphHandler: (call: GraphCall) => Response | Promise<Response>;
 
+// One top-level comment with one reply.
+const thread = () => ({
+  id: COMMENT,
+  message: COMMENT_TEXT,
+  from: { name: COMMENTER, id: COMMENTER_ID },
+  created_time: '2026-11-02T10:00:00+0000',
+  like_count: 2,
+  is_hidden: false,
+  comments: {
+    data: [
+      {
+        id: REPLY_ID,
+        message: REPLY_TEXT,
+        from: { name: 'Erfundene Seite', id: '500000000000888' },
+        created_time: '2026-11-02T11:00:00+0000',
+        like_count: 0,
+        is_hidden: false,
+      },
+    ],
+  },
+});
+
 // The platform: one own post with a comment that has a reply, and a post
-// with no comments. UNLISTED_COMMENT is listed nowhere.
+// with no comments. UNLISTED_COMMENT is listed nowhere. The window read
+// (fields with comments) gets the comments embedded and a post of
+// yesterday, because the window is the last 30 days of the real clock.
 const defaultGraph = ({ method, url }: GraphCall): Response => {
   const path = url.pathname.replace(`/${META_GRAPH_API_VERSION}`, '');
   if (method === 'GET' && path === `/${PAGE}/published_posts`) {
+    if (url.searchParams.get('fields')?.includes('comments')) {
+      return json({
+        data: [
+          {
+            id: POST,
+            permalink_url: 'https://www.facebook.com/erfunden/posts/1',
+            created_time: new Date(Date.now() - 86_400_000).toISOString(),
+            status_type: 'added_photos',
+            comments: { data: [thread()] },
+          },
+          { id: EMPTY_POST, comments: { data: [] } },
+        ],
+      });
+    }
     return json({
       data: [
         {
@@ -118,31 +156,7 @@ const defaultGraph = ({ method, url }: GraphCall): Response => {
     });
   }
   if (method === 'GET' && path === `/${POST}/comments`) {
-    return json({
-      data: [
-        {
-          id: COMMENT,
-          message: COMMENT_TEXT,
-          from: { name: COMMENTER, id: COMMENTER_ID },
-          created_time: '2026-11-02T10:00:00+0000',
-          like_count: 2,
-          is_hidden: false,
-          comments: {
-            data: [
-              {
-                id: REPLY_ID,
-                message: REPLY_TEXT,
-                from: { name: 'Erfundene Seite', id: '500000000000888' },
-                created_time: '2026-11-02T11:00:00+0000',
-                like_count: 0,
-                is_hidden: false,
-              },
-            ],
-          },
-        },
-      ],
-      summary: { total_count: 2 },
-    });
+    return json({ data: [thread()], summary: { total_count: 2 } });
   }
   if (method === 'GET' && path === `/${EMPTY_POST}/comments`) {
     return json({ data: [], summary: { total_count: 0 } });
@@ -348,6 +362,7 @@ describe('/ysocial/inbox with a Facebook Page', () => {
                 timestamp: '2026-11-02T10:00:00+0000',
                 likeCount: 2,
                 hidden: false,
+                fromOwner: false,
                 replies: [
                   {
                     id: REPLY_ID,
@@ -356,6 +371,7 @@ describe('/ysocial/inbox with a Facebook Page', () => {
                     timestamp: '2026-11-02T11:00:00+0000',
                     likeCount: 0,
                     hidden: false,
+                    fromOwner: false,
                   },
                 ],
               },

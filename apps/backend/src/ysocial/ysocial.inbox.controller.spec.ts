@@ -1217,6 +1217,7 @@ describe('/ysocial/inbox', () => {
                 timestamp: '2026-11-02T10:00:00+0000',
                 likeCount: 2,
                 hidden: false,
+                fromOwner: false,
                 replies: [
                   {
                     id: REPLY_ID,
@@ -1225,6 +1226,7 @@ describe('/ysocial/inbox', () => {
                     timestamp: '2026-11-02T11:00:00+0000',
                     likeCount: 0,
                     hidden: false,
+                    fromOwner: false,
                   },
                 ],
               },

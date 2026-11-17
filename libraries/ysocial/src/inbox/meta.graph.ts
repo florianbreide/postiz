@@ -1,6 +1,10 @@
 import { META_GRAPH_API_VERSION } from '@gitroom/nestjs-libraries/integrations/social/facebook.provider';
 import { sanitizeReason } from '../events/hub.event';
-import { InboxPlatformError } from './inbox.rules';
+import {
+  InboxPlatformError,
+  InboxUsageMeter,
+  isInboxCursor,
+} from './inbox.rules';
 
 /**
  * One call to the Graph API (graph.facebook.com, same version as Postiz) for
@@ -26,11 +30,59 @@ export const count = (value: unknown) =>
     ? Math.floor(value)
     : 0;
 
+// Cursor pagination (Graph API, Paginated Results): an edge has more while
+// paging.next is there; paging.cursors.after continues it. "Do not store
+// cursors": the hub passes nextCursor on at once.
+export const hasMore = (edge: unknown) =>
+  !!(edge as GraphObject | undefined)?.paging?.next;
+
+export const afterCursor = (edge: unknown): string | null => {
+  const after = (edge as GraphObject | undefined)?.paging?.cursors?.after;
+  return hasMore(edge) && isInboxCursor(after) ? after : null;
+};
+
+// Time of a Graph answer in ms, NaN when missing or unreadable.
+export const timeOf = (value: unknown) =>
+  typeof value === 'string' ? Date.parse(value) : NaN;
+
+// Graph answers code 100, subcode 33 for an id that does not exist or that
+// this token may not see, for example a comment deleted a moment ago.
+export const isUnknownObject = (err: unknown) =>
+  err instanceof InboxPlatformError &&
+  err.details.code === 100 &&
+  err.details.subcode === 33;
+
+// A post of the window: created at or after postsFrom and before
+// postsBefore. A post without a readable time counts as in the window.
+export const inPostWindow = (
+  created: unknown,
+  window: { postsFrom: Date | null; postsBefore: Date | null }
+) => {
+  const time = timeOf(created);
+  return !(
+    (window.postsFrom && time < window.postsFrom.getTime()) ||
+    (window.postsBefore && time >= window.postsBefore.getTime())
+  );
+};
+
+// Older than the window: the read can stop once a whole page is.
+export const beforePostWindow = (
+  created: unknown,
+  window: { postsFrom: Date | null }
+) => !!window.postsFrom && timeOf(created) < window.postsFrom.getTime();
+
+// A comment counts for since when its time is at or after it. Without a
+// readable time it counts, the hub sorts it out by its id.
+export const newSince = (timestamp: string | null, since: Date | null) =>
+  !since || !(timeOf(timestamp) < since.getTime());
+
+// usage: records x-business-use-case-usage of the answer (PR 73, E82).
 export const metaGraph = async (
   method: 'GET' | 'POST' | 'DELETE',
   accessToken: string,
   path: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  usage?: InboxUsageMeter
 ): Promise<GraphObject> => {
   const values = new URLSearchParams({
     ...params,
@@ -50,6 +102,7 @@ export const metaGraph = async (
     // carry the URL with the token.
     throw new InboxPlatformError({ unavailable: true });
   }
+  usage?.record(res.headers?.get?.('x-business-use-case-usage'));
 
   // Only a JSON object counts as an answer. An empty body (204), HTML, a
   // body cut off or a bare value like true is not readable. When the 15 s
