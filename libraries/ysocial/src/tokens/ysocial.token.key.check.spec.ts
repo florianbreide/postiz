@@ -10,6 +10,8 @@ import {
   YsocialTokenKeyError,
 } from './token.crypto';
 import {
+  POSTIZ_ENCRYPTION_ENV,
+  POSTIZ_TOKEN_PREFIX,
   YsocialTokenKeyCheck,
   ysocialTokenKeyCheckProvider,
 } from './ysocial.token.key.check';
@@ -34,20 +36,29 @@ const foreignOf = (where: any) => {
   };
 };
 
-// count answers the filter for foreign values by field, the one for the
-// state without key by orCount.
+// count answers the filter for foreign values by field, the OR filter for
+// Postiz ciphertext (enc:v1:) by postizCount and the one for the state
+// without key (ys1:) by orCount.
 const build = (opts: {
   foreign?: (filter: { field: string; ownPrefix: string }) => number;
+  postizCount?: number;
   orCount?: number;
   probe?: unknown;
+  rows?: unknown[];
   foreignProbe?: unknown;
 }) => {
   const integration = {
     count: jest.fn(async ({ where }: any) =>
-      where.OR ? opts.orCount ?? 0 : opts.foreign?.(foreignOf(where)) ?? 0
+      where.OR
+        ? startsWithOf(where.OR[0]).prefix === POSTIZ_TOKEN_PREFIX
+          ? opts.postizCount ?? 0
+          : opts.orCount ?? 0
+        : opts.foreign?.(foreignOf(where)) ?? 0
     ),
-    findFirst: jest.fn(async ({ where }: any) =>
-      where.AND ? opts.foreignProbe ?? null : opts.probe ?? null
+    findFirst: jest.fn(async () => opts.foreignProbe ?? null),
+    // Every row with the own key; probe is a shortcut for one row.
+    findMany: jest.fn(
+      async () => opts.rows ?? (opts.probe ? [opts.probe] : [])
     ),
   };
   const check = new YsocialTokenKeyCheck({ model: { integration } } as any);
@@ -58,7 +69,11 @@ describe('YsocialTokenKeyCheck.check', () => {
   it('is off without key and without ciphertext', async () => {
     const { check, integration } = build({ orCount: 0 });
     expect(await check.check({})).toEqual({ encryption: 'off' });
-    const where = integration.count.mock.calls[0][0].where;
+    expect(integration.count.mock.calls[0][0].where.OR).toEqual([
+      { token: { startsWith: 'enc:v1:' } },
+      { refreshToken: { startsWith: 'enc:v1:' } },
+    ]);
+    const where = integration.count.mock.calls[1][0].where;
     expect(where.OR).toEqual([
       { token: { startsWith: 'ys1:' } },
       { refreshToken: { startsWith: 'ys1:' } },
@@ -82,9 +97,10 @@ describe('YsocialTokenKeyCheck.check', () => {
       encryption: 'on',
       kid: key.kid,
     });
-    const filters = integration.count.mock.calls.map(([arg]: any) =>
-      foreignOf(arg.where)
-    );
+    // The first count is the one for enc:v1:, then one per field.
+    const filters = integration.count.mock.calls
+      .slice(1)
+      .map(([arg]: any) => foreignOf(arg.where));
     expect(filters).toEqual([
       { field: 'token', allPrefix: 'ys1:', ownPrefix: `ys1:${key.kid}:` },
       {
@@ -101,7 +117,8 @@ describe('YsocialTokenKeyCheck.check', () => {
     expect(
       (await check.check({ [YSOCIAL_TOKEN_KEY_ENV]: base64 })).encryption
     ).toBe('on');
-    expect(integration.findFirst).toHaveBeenCalledTimes(1);
+    expect(integration.findMany).toHaveBeenCalledTimes(1);
+    expect(integration.findFirst).not.toHaveBeenCalled();
   });
 
   it('starts while own ciphertext appears during the check', async () => {
@@ -178,7 +195,7 @@ describe('YsocialTokenKeyCheck.check', () => {
     const probe = { token: 'x', refreshToken: null as string | null };
     const { check, integration } = build({ probe });
     await check.check({ [YSOCIAL_TOKEN_KEY_ENV]: base64 });
-    const args = integration.findFirst.mock.calls[0] as any;
+    const args = integration.findMany.mock.calls[0] as any;
     expect(args[0].where.OR).toEqual([
       { token: { startsWith: `ys1:${key.kid}:` } },
       { refreshToken: { startsWith: `ys1:${key.kid}:` } },
@@ -200,6 +217,220 @@ describe('YsocialTokenKeyCheck.check', () => {
     await expect(
       check.check({ [YSOCIAL_TOKEN_KEY_ENV]: base64 })
     ).rejects.toBeInstanceOf(YsocialTokenKeyError);
+  });
+});
+
+describe('YsocialTokenKeyCheck.check, token encryption of Postiz', () => {
+  const POSTIZ_VALUE = `${POSTIZ_TOKEN_PREFIX}tok-secret-value`;
+
+  it('exports the env name and the prefix of Postiz', () => {
+    expect(POSTIZ_ENCRYPTION_ENV).toBe('ENCRYPTION_PROVIDER');
+    expect(POSTIZ_TOKEN_PREFIX).toBe('enc:v1:');
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['spaces', '   '],
+    ['tab and newline', ' \t\n '],
+  ])('treats %s ENCRYPTION_PROVIDER as not set', async (_name, value) => {
+    const { check } = build({});
+    await expect(
+      check.check({ [POSTIZ_ENCRYPTION_ENV]: value })
+    ).resolves.toEqual({ encryption: 'off' });
+  });
+
+  it.each(['local', 'aws-kms', 'x', ' local '])(
+    'fails for ENCRYPTION_PROVIDER=%j before touching the database',
+    async (value) => {
+      const { check, integration } = build({});
+      const error = await check
+        .check({
+          [POSTIZ_ENCRYPTION_ENV]: value,
+        })
+        .catch((err) => err);
+      expect(error).toBeInstanceOf(YsocialTokenKeyError);
+      expect(error.message).toContain(POSTIZ_ENCRYPTION_ENV);
+      expect(integration.count).not.toHaveBeenCalled();
+      expect(integration.findFirst).not.toHaveBeenCalled();
+    }
+  );
+
+  it('fails with a key too, when ENCRYPTION_PROVIDER is set', async () => {
+    const { check } = build({});
+    const error = await check
+      .check({
+        [POSTIZ_ENCRYPTION_ENV]: 'local',
+        [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64(),
+      })
+      .catch((err) => err);
+    expect(error).toBeInstanceOf(YsocialTokenKeyError);
+    expect(error.message).toContain(POSTIZ_ENCRYPTION_ENV);
+  });
+
+  it('counts enc:v1: in token and in refreshToken with one OR, before the own key is considered', async () => {
+    const { check, integration } = build({ postizCount: 4 });
+    const error = await check.check({}).catch((err) => err);
+    expect(error).toBeInstanceOf(YsocialTokenKeyError);
+    expect(integration.count).toHaveBeenCalledTimes(1);
+    expect(integration.count.mock.calls[0][0].where).toEqual({
+      OR: [
+        { token: { startsWith: 'enc:v1:' } },
+        { refreshToken: { startsWith: 'enc:v1:' } },
+      ],
+    });
+    expect(error.message).toContain('4');
+    expect(error.message).toContain(POSTIZ_TOKEN_PREFIX);
+  });
+
+  it('fails on enc:v1: with a valid key as well, without the other queries', async () => {
+    const { check, integration } = build({ postizCount: 1 });
+    await expect(
+      check.check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+    ).rejects.toBeInstanceOf(YsocialTokenKeyError);
+    expect(integration.count).toHaveBeenCalledTimes(1);
+    expect(integration.findFirst).not.toHaveBeenCalled();
+    expect(integration.findMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['token', 'refreshToken'])(
+    'fails when only %s carries enc:v1:',
+    async (field) => {
+      // The mock answers by the filter: only the one OR entry for the field
+      // would match in the database.
+      const integration = {
+        count: jest.fn(async ({ where }: any) =>
+          where.OR.some(
+            (entry: any) => entry[field]?.startsWith === POSTIZ_TOKEN_PREFIX
+          )
+            ? 1
+            : 0
+        ),
+        findFirst: jest.fn(),
+      };
+      const check = new YsocialTokenKeyCheck({
+        model: { integration },
+      } as any);
+      await expect(check.check({})).rejects.toBeInstanceOf(
+        YsocialTokenKeyError
+      );
+    }
+  );
+
+  it.each(['token', 'refreshToken'])(
+    'fails when the probe has our ys1: around enc:v1: in %s',
+    async (field) => {
+      const base64 = newKeyBase64();
+      const probe = { token: 'x', refreshToken: null as string | null } as any;
+      probe[field] = POSTIZ_VALUE;
+      const { check } = build({ probe });
+      const error = await check
+        .check({ [YSOCIAL_TOKEN_KEY_ENV]: base64 })
+        .catch((err) => err);
+      expect(error).toBeInstanceOf(YsocialTokenKeyError);
+      expect(error.message).toContain(POSTIZ_TOKEN_PREFIX);
+      expect(error.message).toContain(YSOCIAL_TOKEN_KEY_ENV);
+    }
+  );
+
+  it.each([1, 2])(
+    'fails when only row %i of the own-key rows has enc:v1: inside, with the count',
+    async (index) => {
+      const rows: any[] = [
+        { token: 'a', refreshToken: null },
+        { token: 'b', refreshToken: 'c' },
+        { token: 'd', refreshToken: null },
+      ];
+      rows[index].refreshToken = POSTIZ_VALUE;
+      const { check } = build({ rows });
+      const error = await check
+        .check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+        .catch((err) => err);
+      expect(error).toBeInstanceOf(YsocialTokenKeyError);
+      expect(error.message).toContain('1 Kanäle');
+      expect(error.message).toContain(POSTIZ_TOKEN_PREFIX);
+      expect(error.message).not.toContain('tok-secret-value');
+    }
+  );
+
+  it('counts every row that has enc:v1: inside', async () => {
+    const { check } = build({
+      rows: [
+        { token: POSTIZ_VALUE, refreshToken: null },
+        { token: 'ok', refreshToken: null },
+        { token: 'x', refreshToken: POSTIZ_VALUE },
+        { token: POSTIZ_VALUE, refreshToken: POSTIZ_VALUE },
+      ],
+    });
+    const error = await check
+      .check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+      .catch((err) => err);
+    expect(error.message).toContain('3 Kanäle');
+  });
+
+  it('fails when a later row cannot be decrypted (changed value)', async () => {
+    const changed = {
+      get token(): string {
+        throw new YsocialTokenKeyError('verändert');
+      },
+      refreshToken: null as string | null,
+    };
+    const { check } = build({
+      rows: [{ token: 'a', refreshToken: null }, changed],
+    });
+    await expect(
+      check.check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+    ).rejects.toBeInstanceOf(YsocialTokenKeyError);
+  });
+
+  it('names the action in the messages (partial text only)', async () => {
+    const wrapped = await build({
+      rows: [{ token: POSTIZ_VALUE, refreshToken: null }],
+    })
+      .check.check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+      .catch((err) => err);
+    const stored = await build({ postizCount: 1 })
+      .check.check({})
+      .catch((err) => err);
+    for (const error of [wrapped, stored]) {
+      expect(error.message).toContain('neu verbinden');
+      expect(error.message).toContain(POSTIZ_ENCRYPTION_ENV);
+    }
+  });
+
+  it('passes a probe that does not start with enc:v1:', async () => {
+    const { check } = build({
+      probe: { token: 'plain enc:v1: inside', refreshToken: null },
+    });
+    await expect(
+      check.check({ [YSOCIAL_TOKEN_KEY_ENV]: newKeyBase64() })
+    ).resolves.toMatchObject({ encryption: 'on' });
+  });
+
+  it('puts no token value or key into any message', async () => {
+    const base64 = newKeyBase64();
+    const messages: string[] = [];
+    const collect = async (
+      env: Record<string, string | undefined>,
+      opts: Parameters<typeof build>[0]
+    ) => {
+      const error = await build(opts)
+        .check.check(env)
+        .catch((err) => err);
+      expect(error).toBeInstanceOf(YsocialTokenKeyError);
+      messages.push(error.message);
+    };
+    await collect({ [POSTIZ_ENCRYPTION_ENV]: 'local' }, {});
+    await collect({}, { postizCount: 2 });
+    await collect(
+      { [YSOCIAL_TOKEN_KEY_ENV]: base64 },
+      { probe: { token: POSTIZ_VALUE, refreshToken: null } }
+    );
+    for (const message of messages) {
+      expect(message).not.toContain('tok-secret-value');
+      expect(message).not.toContain(POSTIZ_VALUE);
+      expect(message).not.toContain(base64);
+    }
   });
 });
 
@@ -262,6 +493,36 @@ describe('YsocialTokenKeyCheck.run', () => {
     expect(text).not.toContain('tok-secret-value');
   });
 
+  it('logs the Postiz encryption failure with prefix and rethrows, without a value', async () => {
+    delete process.env[YSOCIAL_TOKEN_KEY_ENV];
+    const { check } = build({ postizCount: 2 });
+    await expect(check.run()).rejects.toBeInstanceOf(YsocialTokenKeyError);
+    const text = logs.join('\n');
+    expect(text).toMatch(/^token key check failed: /);
+    expect(text).toContain(POSTIZ_TOKEN_PREFIX);
+    expect(text).toContain('2');
+  });
+
+  it('logs the ENCRYPTION_PROVIDER failure and rethrows', async () => {
+    delete process.env[YSOCIAL_TOKEN_KEY_ENV];
+    const savedProvider = process.env[POSTIZ_ENCRYPTION_ENV];
+    process.env[POSTIZ_ENCRYPTION_ENV] = 'aws-kms';
+    try {
+      const { check } = build({});
+      await expect(check.run()).rejects.toBeInstanceOf(YsocialTokenKeyError);
+      expect(logs.join('\n')).toMatch(
+        new RegExp(`token key check failed: .*${POSTIZ_ENCRYPTION_ENV}`)
+      );
+      expect(logs.join('\n')).not.toContain('aws-kms');
+    } finally {
+      if (savedProvider === undefined) {
+        delete process.env[POSTIZ_ENCRYPTION_ENV];
+      } else {
+        process.env[POSTIZ_ENCRYPTION_ENV] = savedProvider;
+      }
+    }
+  });
+
   it('rethrows a database error without logging it as key error', async () => {
     delete process.env[YSOCIAL_TOKEN_KEY_ENV];
     const boom = new Error('database down');
@@ -282,6 +543,7 @@ describe('ysocialTokenKeyCheckProvider', () => {
       integration: {
         count: jest.fn(async () => foreignCount),
         findFirst: jest.fn(async () => null),
+        findMany: jest.fn(async () => []),
       },
     },
   });

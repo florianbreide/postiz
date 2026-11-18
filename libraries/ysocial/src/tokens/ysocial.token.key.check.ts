@@ -9,6 +9,14 @@ import {
   YsocialTokenKeyError,
 } from './token.crypto';
 
+// The token encryption of Postiz itself (v2.26.0, #2430): it encrypts in
+// IntegrationRepository and PostsRepository with the prefix enc:v1:. The
+// ysocial module reads tokens through Prisma below that (inbox, channel
+// check, deletion job) and would send the cipher to the platforms, so it
+// stays off (YSOCIAL-PATCHES.md, ENCRYPTION_PROVIDER).
+export const POSTIZ_ENCRYPTION_ENV = 'ENCRYPTION_PROVIDER';
+export const POSTIZ_TOKEN_PREFIX = 'enc:v1:';
+
 export interface YsocialTokenKeyState {
   encryption: 'on' | 'off';
   kid?: string;
@@ -26,6 +34,9 @@ export const storedTokenStartsWith = (
 /**
  * Start check of the token key (PLAN E24, PR 25), fail-closed. It throws if
  *
+ * - ENCRYPTION_PROVIDER of Postiz is set, or a token carries its prefix
+ *   enc:v1:, stored as it is or inside our own encryption, every row with
+ *   the own key read (since 0.10.2),
  * - YSOCIAL_TOKEN_KEY is set but not 32 bytes in base64,
  * - no key is set, but encrypted tokens exist,
  * - tokens are encrypted with another key (key id in the value).
@@ -57,8 +68,25 @@ export class YsocialTokenKeyCheck {
   async check(
     env: Record<string, string | undefined>
   ): Promise<YsocialTokenKeyState> {
+    if (env[POSTIZ_ENCRYPTION_ENV]?.trim()) {
+      throw new YsocialTokenKeyError(
+        `${POSTIZ_ENCRYPTION_ENV} ist gesetzt: Die Token-Verschlüsselung von Postiz bleibt aus, das ysocial-Modul läse sonst die Chiffre (YSOCIAL-PATCHES.md)`
+      );
+    }
     const key = readYsocialTokenKey(env);
     const integration = this._integration.model.integration;
+    const postizEncrypted = await integration.count({
+      where: {
+        OR: YSOCIAL_TOKEN_FIELDS.map((field) =>
+          storedTokenStartsWith(field, POSTIZ_TOKEN_PREFIX)
+        ),
+      },
+    });
+    if (postizEncrypted) {
+      throw new YsocialTokenKeyError(
+        `${postizEncrypted} Kanäle haben Tokens mit der Verschlüsselung von Postiz (${POSTIZ_TOKEN_PREFIX}), damit startet Postiz nicht: die Kanäle neu verbinden (YSOCIAL-PATCHES.md, ${POSTIZ_ENCRYPTION_ENV})`
+      );
+    }
 
     if (!key) {
       const encrypted = await integration.count({
@@ -109,9 +137,10 @@ export class YsocialTokenKeyCheck {
       }
     }
 
-    // One row decrypted as a probe: the extension decrypts on access and
-    // throws YsocialTokenKeyError if a value was changed.
-    const probe = await integration.findFirst({
+    // Every row with the own key decrypted (one row per channel): the
+    // extension decrypts on access and throws YsocialTokenKeyError if a
+    // value was changed, and the cipher of Postiz must not be inside.
+    const rows = await integration.findMany({
       where: {
         OR: YSOCIAL_TOKEN_FIELDS.map((field) =>
           storedTokenStartsWith(field, ownPrefix)
@@ -119,9 +148,15 @@ export class YsocialTokenKeyCheck {
       },
       select: { token: true, refreshToken: true },
     });
-    if (probe) {
-      String(probe.token);
-      String(probe.refreshToken);
+    const wrapped = rows.filter((row) =>
+      YSOCIAL_TOKEN_FIELDS.some((field) =>
+        String(row[field] ?? '').startsWith(POSTIZ_TOKEN_PREFIX)
+      )
+    ).length;
+    if (wrapped) {
+      throw new YsocialTokenKeyError(
+        `${wrapped} Kanäle haben unter ${YSOCIAL_TOKEN_KEY_ENV} Tokens mit der Verschlüsselung von Postiz (${POSTIZ_TOKEN_PREFIX}), damit startet Postiz nicht: die Kanäle neu verbinden (YSOCIAL-PATCHES.md, ${POSTIZ_ENCRYPTION_ENV})`
+      );
     }
 
     return { encryption: 'on', kid: key.kid };
