@@ -4,7 +4,7 @@ Diese Datei enthält nur den Patch-Stand und Verweise. Status, Termine und offen
 
 ## Patch-Stand
 
-- Basis: upstream v2.25.3 (24.10.2026)
+- Basis: upstream v2.26.0 (13.11.2026)
 - Patches: 7 von höchstens 8 (E58, freigegeben 17.11.2026; `apps/backend/src/app.module.ts`, `YsocialModule`; `apps/orchestrator/src/app.module.ts`, `YsocialOrchestratorModule`; `libraries/nestjs-libraries/src/database/prisma/prisma.service.ts`, verschlüsselte Kanal-Tokens, PR 25; `facebook.provider.ts` und `instagram.provider.ts`, Meta-Scopes für die Inbox, PR 38; `libraries/nestjs-libraries/src/temporal/temporal.module.ts`, Payload-Codec für Temporal, PR 40; `linkedin.page.provider.ts`, LinkedIn-Seiten ohne OpenID Connect (Weg A), PR 39)
 - Details und neue Dateien außerhalb der ysocial-Ordner: `YSOCIAL-PATCHES.md`
 
