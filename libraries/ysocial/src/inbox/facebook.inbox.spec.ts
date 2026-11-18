@@ -2087,7 +2087,7 @@ describe('FacebookInbox', () => {
       expect(JSON.stringify(posts)).not.toContain('600000000000001');
     });
 
-    describe('the tagged part of the text (taggedText)', () => {
+    describe('the tagged part of the text (taggedPart)', () => {
       const FULL = 'Max Muster';
       const mentionsOf = async (comment: Record<string, unknown>) => {
         respond(feedWith({ id: COMMENT, ...comment }));
