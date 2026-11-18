@@ -1,4 +1,5 @@
 import {
+  MEDIA_FIELDS,
   POST_FIELDS,
   POST_QUERY_FIELDS,
   POSTS_LIMIT,
@@ -11,12 +12,16 @@ const setup = () => {
     findMany: jest.fn().mockResolvedValue([]),
     findFirst: jest.fn().mockResolvedValue(null),
   };
+  const media = {
+    findMany: jest.fn().mockResolvedValue([]),
+  };
   const repository = new YsocialReadRepository(
     {} as any,
     {} as any,
-    { model: { post } } as any
+    { model: { post } } as any,
+    { model: { media } } as any
   );
-  return { repository, post };
+  return { repository, post, media };
 };
 
 describe('YsocialReadRepository posts', () => {
@@ -97,5 +102,41 @@ describe('YsocialReadRepository posts', () => {
         )
       ).toEqual(['settings']);
     }
+  });
+});
+
+describe('YsocialReadRepository media (K6)', () => {
+  it('MEDIA_FIELDS is exactly id, organizationId, path and fileSize', () => {
+    expect(Object.keys(MEDIA_FIELDS)).toEqual([
+      'id',
+      'organizationId',
+      'path',
+      'fileSize',
+    ]);
+    expect(Object.values(MEDIA_FIELDS).every((value) => value === true)).toBe(
+      true
+    );
+    for (const field of READ_API_FORBIDDEN_FIELDS) {
+      expect(Object.keys(MEDIA_FIELDS)).not.toContain(field);
+    }
+  });
+
+  it('getMedia reads the ids in one findMany, also deleted rows, with MEDIA_FIELDS', async () => {
+    const { repository, media } = setup();
+    await repository.getMedia(['media-1', 'media-2']);
+    expect(media.findMany).toHaveBeenCalledTimes(1);
+    const args = media.findMany.mock.calls[0][0];
+    expect(args).toEqual({
+      where: { id: { in: ['media-1', 'media-2'] } },
+      select: MEDIA_FIELDS,
+    });
+    expect(args.where).not.toHaveProperty('deletedAt');
+  });
+
+  it('getMedia returns what the model returns', async () => {
+    const { repository, media } = setup();
+    const rows = [{ id: 'media-1' }];
+    media.findMany.mockResolvedValueOnce(rows);
+    expect(await repository.getMedia(['media-1'])).toBe(rows);
   });
 });
