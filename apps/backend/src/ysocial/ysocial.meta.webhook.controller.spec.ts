@@ -21,6 +21,8 @@ import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/databa
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
+import { YsocialAutomationRepository } from '../../../../libraries/ysocial/src/database/ysocial.automation.repository';
+import { YsocialAutomationCheck } from '../../../../libraries/ysocial/src/automation/ysocial.automation.check';
 import { YsocialMetaWebhookService } from '../../../../libraries/ysocial/src/webhooks/ysocial.meta.webhook.service';
 import { WEBHOOK_LOG_KEY } from '../../../../libraries/ysocial/src/webhooks/webhook.rules';
 
@@ -179,6 +181,10 @@ describe('/ysocial-meta-webhook', () => {
       .overrideProvider(YsocialRetryRepository)
       .useValue({})
       .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
+      .overrideProvider(YsocialAutomationRepository)
+      .useValue({})
+      .overrideProvider(YsocialAutomationCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue({})

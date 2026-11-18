@@ -36,6 +36,8 @@ import { YsocialReadRepository } from '../../../../libraries/ysocial/src/databas
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
+import { YsocialAutomationRepository } from '../../../../libraries/ysocial/src/database/ysocial.automation.repository';
+import { YsocialAutomationCheck } from '../../../../libraries/ysocial/src/automation/ysocial.automation.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YSOCIAL_MODULE_VERSION } from '../../../../libraries/ysocial/src/ysocial.version';
@@ -259,6 +261,10 @@ describe('GET /ysocial/status', () => {
       .overrideProvider(YsocialRetryService)
       .useValue({})
       .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
+      .overrideProvider(YsocialAutomationRepository)
+      .useValue({})
+      .overrideProvider(YsocialAutomationCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue({})
