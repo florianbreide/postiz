@@ -6,7 +6,8 @@ import { PrismaRepository } from '@gitroom/nestjs-libraries/database/prisma/pris
  * token, refreshToken or customInstanceDetails, and settings never goes out:
  * the post queries read it (POST_QUERY_FIELDS) only for the field plug. Post
  * text and media since PR 36 (E52): the service passes on only path and type
- * of each medium, see ysocial.read.service.ts.
+ * of each medium, see ysocial.read.service.ts, and since 0.10.1 its size
+ * from the media library (MEDIA_FIELDS, K6).
  */
 export const CUSTOMER_FIELDS = {
   id: true,
@@ -69,12 +70,21 @@ export const READ_API_FORBIDDEN_FIELDS = [
 
 export const POSTS_LIMIT = 2000;
 
+// What the size of a medium needs from the media library (K6): only these.
+export const MEDIA_FIELDS = {
+  id: true,
+  organizationId: true,
+  path: true,
+  fileSize: true,
+} as const;
+
 @Injectable()
 export class YsocialReadRepository {
   constructor(
     private _customer: PrismaRepository<'customer'>,
     private _integration: PrismaRepository<'integration'>,
-    private _post: PrismaRepository<'post'>
+    private _post: PrismaRepository<'post'>,
+    private _media: PrismaRepository<'media'>
   ) {}
 
   getCustomers() {
@@ -106,6 +116,16 @@ export class YsocialReadRepository {
     return this._post.model.post.findFirst({
       where: { id, deletedAt: null },
       select: POST_QUERY_FIELDS,
+    });
+  }
+
+  // The media rows of the ids in the posts, also deleted ones: a post keeps
+  // its medium after it left the library. The service checks organization
+  // and path.
+  getMedia(ids: string[]) {
+    return this._media.model.media.findMany({
+      where: { id: { in: ids } },
+      select: MEDIA_FIELDS,
     });
   }
 
