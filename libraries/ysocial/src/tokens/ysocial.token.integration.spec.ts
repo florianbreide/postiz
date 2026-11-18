@@ -768,6 +768,53 @@ describeIt('token encryption with a real database', () => {
       expect(error.message).toContain(YSOCIAL_TOKEN_KEY_ENV);
     });
 
+    it.each(['token', 'refreshToken'])(
+      'fails on a row with enc:v1: stored raw in %s, with and without key',
+      async (field) => {
+        const org = await makeOrg();
+        const secret = 'enc:v1:tok-secret-value';
+        await raw.integration.create({
+          data: integrationData(org.id, { [field]: secret }),
+        });
+        for (const env of [{}, { [YSOCIAL_TOKEN_KEY_ENV]: keyBase64 }]) {
+          const error = await buildCheck()
+            .check(env)
+            .catch((err: Error) => err);
+          expect(error).toBeInstanceOf(YsocialTokenKeyError);
+          expect(error.message).toContain('enc:v1:');
+          expect(error.message).not.toContain('tok-secret-value');
+        }
+      }
+    );
+
+    it('fails when our ys1: encryption wraps enc:v1:', async () => {
+      const org = await makeOrg();
+      // Ordinary rows first, so the wrapped one is not the first found.
+      await prisma.integration.create({ data: integrationData(org.id) });
+      await prisma.integration.create({ data: integrationData(org.id) });
+      // Written through the extension: ys1:<kid>:... around the Postiz cipher.
+      await prisma.integration.create({
+        data: integrationData(org.id, { token: 'enc:v1:tok-secret-value' }),
+      });
+      expect(
+        await raw.integration.count({
+          where: { token: { startsWith: 'ys1:' } },
+        })
+      ).toBe(3);
+      const error = await buildCheck()
+        .check({ [YSOCIAL_TOKEN_KEY_ENV]: keyBase64 })
+        .catch((err: Error) => err);
+      expect(error).toBeInstanceOf(YsocialTokenKeyError);
+      expect(error.message).toContain('enc:v1:');
+      expect(error.message).not.toContain('tok-secret-value');
+    });
+
+    it('fails when ENCRYPTION_PROVIDER is set, on any database', async () => {
+      await expect(
+        buildCheck().check({ ENCRYPTION_PROVIDER: 'local' })
+      ).rejects.toBeInstanceOf(YsocialTokenKeyError);
+    });
+
     it('fails when a value was changed (probe cannot decrypt)', async () => {
       const org = await makeOrg();
       const row = await prisma.integration.create({
