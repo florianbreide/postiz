@@ -583,6 +583,54 @@ Abweisungen wie bei der Demo, dazu:
 - Liken: Die Seite muss den Kommentar liken können, laut Meta mit der Aufgabe CREATE_CONTENT, das Zurücknehmen mit MODERATE.
 - Instagram ohne `comments_count` (0) wird ohne Aufruf übersprungen, wie bei der Demo.
 
+## Inbox für LinkedIn-Seiten (Backend, ab 0.10.0, Phase 3 PR 75)
+
+Dieselben Routen wie bei Meta, für Kanäle `linkedin-page` (E92). Lesen, als Seite antworten, löschen, liken. Kein Verbergen, die Comments API hat es nicht (W28). Logik in `libraries/ysocial/src/inbox/linkedin.inbox.ts`, Version `LinkedIn-Version: 202611` im eigenen Code, nicht die 202601 von Postiz (R20). Scopes aus Patch 7 (`r_organization_social_feed`, `w_organization_social_feed`), `r_organization_social` von Postiz.
+
+| Variable | Wert |
+|---|---|
+| `YSOCIAL_INBOX_LINKEDIN` | `true`: LinkedIn-Kanäle haben eine Inbox, mit der Demo-Liste oder mit `YSOCIAL_INBOX_ENABLED`. Jeder andere Wert und eine fehlende Variable: 409 `provider_not_supported` wie bis 0.9.9, vor jedem Aufruf bei LinkedIn. Auf Prod nie vor dem Standard Tier (B6): Im Development Tier hat die App 100 Aufrufe je Mitglied und 500 je Tag, Postiz postet mit derselben App (Hub `linkedin.md` 1.3) |
+
+- Fähigkeiten: `reply`, `delete` und `like` sind `true`, `hide` und `realtime` `false`. Verbergen antwortet 409 `action_not_supported`, ohne Aufruf. Die Webhook-Routen lesen nichts (`subscribed: false`), das Anmelden endet mit 502 `platform_error`.
+- Rolle: Lesen braucht die Rolle ADMINISTRATOR oder DIRECT_SPONSORED_CONTENT_POSTER auf der Seite, Schreiben dazu RECRUITING_POSTER. Fehlt sie, antwortet LinkedIn 403, die Route 502 `platform_error` mit `platformStatus: 403`. Postiz zeigt beim Verbinden auch Seiten, auf denen die Person nur CONTENT_ADMINISTRATOR ist (Hub `linkedin.md` 3).
+- Kennungen: LinkedIn nutzt URNs, die Routen nehmen nur Ziffern und `_`. Der Fork schreibt sie deshalb als Zahlen, die Art vorn: `0` activity, `1` share, `2` ugcPost.
+
+| Was | Kennung im Fork | URN bei LinkedIn |
+|---|---|---|
+| Post | `<Art>_<ID>` | `urn:li:share:<ID>` oder `urn:li:ugcPost:<ID>` |
+| Kommentar | `<Art>_<Thread>_<ID>` | `urn:li:comment:(urn:li:<Art>:<Thread>,<ID>)` |
+| Antwort | `<Art>_<Thread>_<Kommentar>_<ID>` | wie Kommentar, dazu der Kommentar der obersten Ebene |
+
+- `?postId=` braucht LinkedIn für jede Route eines Kommentars, dessen Thread eine `activity` ist (Art `0`): Für Antworten und Löschen nimmt LinkedIn den Post, nicht die Activity. Ohne `postId` antwortet die Route dann 503 `ownership_unknown`, ohne Aufruf und ohne Suche über die Posts, die Aufrufe des Tages kostete. Steht share oder ugcPost schon im Kommentar, reicht die Kennung allein. Widerspricht eine `postId` dieser Kennung, ebenfalls 503 `ownership_unknown`, denn der Kommentar kann trotzdem existieren.
+- Prüfung vor dem Schreiben und beim Gespräch: Der Post gehört der Organisation des Kanals (`GET /rest/posts/{urn}`, `author`), der Kommentar steht unter dem Post (`…/comments/{id}`), eine Antwort unter ihrem Kommentar. `comment_not_found` gibt es nur bei 404 von LinkedIn oder wenn die Antwort einen anderen Post, Besitzer oder Thread nennt, denn der Hub markiert den Kommentar danach für immer als gelöscht. Fehlen in der Antwort die Felder dafür (`id`, `author`, `commentUrn`), ist sie unlesbar: 502 `platform_error`. Bei einem Thread `activity` prüft der Fork nicht selbst, ob die Activity zum Post gehört, die Posts API nennt sie nicht. Er verlässt sich auf das 404 von LinkedIn unter einem fremden Post (QA auf Staging).
+- Einträge: `username` ist `null`, den Namen eines Mitglieds liefert die Comments API nicht, und die Profile API gehört nicht zur App (**ungeprüft**, ob eine Projektion `actor~` ohne weitere Rechte geht). `fromOwner`: `actor` ist die Organisation des Kanals. `mentions`: die Teile des Textes, die LinkedIn in `message.attributes` als Person oder Organisation markiert (`start`, `length`), nie die URN. `likeCount` aus `likesSummary.totalLikes`, `hidden` immer `false`. `permalink` ist `https://www.linkedin.com/feed/update/<URN>/`, `commentsCount` `null`.
+- Antworten gehen immer an den Kommentar der obersten Ebene des Threads, als Seite, über `POST /rest/socialActions/{Kommentar}/comments` mit `actor` (die Organisation), `object` (der Post) und `parentComment` („Create a Comment on a Comment“). Die neue Kennung kommt aus dem Kopf `x-restli-id`. Gelöscht wird auch eine Antwort unter dem Post (`DELETE /rest/socialActions/{Post}/comments/{ID}?actor=`), so wie die Doku es zeigt.
+- URNs im Pfad sind URL-kodiert, auch `(`, `)` und `,` (`%28`, `%29`, `%2C`), wie im Beispiel der Reactions API. Fehlertexte von LinkedIn gehen bereinigt weiter, URNs von Personen als `urn:li:person:***`.
+
+**Fenster, Cursor und Aufrufe:**
+- Die Posts kommen nach Erstellung, neueste zuerst (`sortBy=CREATED`), je Seite 5. Der erste Post, der älter ist als das Fenster, beendet es. Nur veröffentlichte Posts der Organisation zählen.
+- Je Post ein Aufruf für die Kommentare (50) und je Kommentar mit Antworten einer für die Antworten (25). Sagt ein Kommentar nicht, ob er Antworten hat (`commentsSummary`), liest der Fork sie.
+- Höchstens 20 Aufrufe je Antwort der Route `items` (`LINKEDIN_CALLS_PER_READ`), und ein neuer Aufruf beginnt nur in den ersten 20 s (`LINKEDIN_START_BUDGET_MS`). Geprüft wird vor jeder Seite mit Posts, vor jedem Post und vor dem Lesen der Antworten eines Kommentars. Ist das Budget vor einem Post aufgebraucht, steht in `nextCursor` die Nummer dieses Posts. Der erste Post einer Antwort läuft immer, so geht der Cursor weiter. Ist es mitten in einem Post aufgebraucht, fehlen dort Antworten und es steht `truncated: true`. Ein einzelner Aufruf darf 15 s dauern, eine Antwort braucht also höchstens etwa 35 s, so lange wartet der Hub auf ein Lesen.
+
+| Route | Aufrufe bei LinkedIn |
+|---|---|
+| `capabilities` | 0 |
+| `items` | 1 je 5 Posts, 1 je Post im Fenster, 1 je Kommentar mit Antworten, höchstens 20 |
+| `comments/:commentId` | Kommentar 3, Antwort 4 |
+| Antworten, Löschen, Liken, Like zurücknehmen | Prüfung 2 (bei einer Antwort 3), dazu 1 |
+| Demo `comments` | wie `items` für die letzten 5 Posts |
+
+Rechnung für den Development Tier: Ein Abruf eines Kanals mit 3 Posts im Fenster braucht 4 Aufrufe, wenn LinkedIn `commentsSummary` an den Kommentaren mitschickt und keiner Antworten hat. Fehlt das Feld (es steht nur in einem Beispiel der Doku), kommt je Kommentar einer dazu: Bei 3 Posts mit je 5 Kommentaren sind es 19. Schon 4 Aufrufe alle 5 Minuten sind 1.152 am Tag, stündlich 96, bei 100 je Mitglied und Tag. Dazu kommen die Aufrufe von Postiz selbst. Im Development Tier geht deshalb nur der Abruf von Hand für die Y-Social-Seite (Video zum Standard Tier, Hub `linkedin.md` 5). Der Standard Tier hat laut LinkedIn keine Beschränkung (`linkedin.md` 1.3).
+
+**Grenzen und Ungeprüftes**
+- `count` und `start` an `…/comments` und `paging` in der Antwort stehen nicht in der Doku der Comments API. Kennt LinkedIn `count` nicht, scheitert jedes Lesen mit 400. Ohne `paging` gilt ein Post als vollständig gelesen (`truncated: false`).
+- URNs im Pfad sind URL-kodiert, wie es die Posts API verlangt. Die Beispiele der Comments API zeigen sie unkodiert.
+- Reaktion auf einen Kommentar: Die Reactions API nennt als `root` einmal den Kommentar, einmal den Post. Der Fork nimmt den Kommentar. Ein Like, das es schon gibt (409), und das Zurücknehmen eines fehlenden (404) gelten als erledigt.
+- Antworten über den Kommentar im Pfad und Löschen einer Antwort unter dem Post folgen der Doku, sind aber auf Staging zu prüfen, bevor `YSOCIAL_INBOX_LINKEDIN` gesetzt wird: Steht eine Antwort danach als Kommentar der obersten Ebene da, ist der Pfad falsch.
+- Ob die Kennungen der Kommentare immer eine `activity` als Thread tragen oder auch `share` und `ugcPost`, zeigt Staging. Beides wird gelesen.
+- Ob `offset` und `length` der Markierungen in UTF-16-Einheiten zählen, ist offen wie bei Facebook.
+- Organization Social Action Notifications (Webhooks) gibt es erst im Standard Tier. Ob sie den Abruf ersetzen, ist **ungeprüft** (Plan PR 75).
+
 ## Webhooks für die Inbox (Backend, ab 0.9.1 für die Demo, ab 0.9.8 für alle Meta-Kanäle)
 
 Zuerst gebaut für die Videos zu `pages_manage_metadata` und den Webhook-Feldern `feed` (Seite) und `comments` (Instagram), Hub `meta.md` §6. Ab 0.9.8 (Phase 3, PR 74, E81, E97) für jeden Facebook- und Instagram-Kanal. Vier Teile:

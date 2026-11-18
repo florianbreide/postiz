@@ -25,6 +25,7 @@ import {
 } from './inbox.rules';
 import { inboxEventsEnabled } from '../webhooks/webhook.rules';
 import { InstagramInbox } from './instagram.inbox';
+import { LinkedinInbox } from './linkedin.inbox';
 import { FacebookInbox } from './facebook.inbox';
 
 type Rejection = { status: number; code: string; [field: string]: unknown };
@@ -101,10 +102,12 @@ export class YsocialInboxService {
   // One inbox provider per Postiz provider identifier. Facebook reads Page
   // comments with pages_read_user_content, which the Postiz provider asks
   // for since ysocial patch 4 (scopes/meta.scopes.ts). Pages connected
-  // before carry it only after they are connected again.
+  // before carry it only after they are connected again. LinkedIn pages
+  // (PR 75) only with YSOCIAL_INBOX_LINKEDIN=true, the scopes since patch 7.
   protected providers: Record<string, YsocialInboxProvider> = {
     instagram: new InstagramInbox(),
     facebook: new FacebookInbox(),
+    'linkedin-page': new LinkedinInbox(),
   };
 
   constructor(private _inbox: YsocialInboxRepository) {}
@@ -150,10 +153,15 @@ export class YsocialInboxService {
       commentId,
       actorHeader,
       async (provider, channel) => {
-        const { id } = await provider.reply(channel, commentId, message);
+        const { id } = await provider.reply(
+          channel,
+          commentId,
+          message,
+          hintOf(postId)
+        );
         return { integrationId, commentId, replyId: id };
       },
-      { postId }
+      { postId, capability: 'reply' }
     );
   }
 
@@ -170,10 +178,10 @@ export class YsocialInboxService {
       commentId,
       actorHeader,
       async (provider, channel) => {
-        await provider.hide(channel, commentId, hide);
+        await provider.hide(channel, commentId, hide, hintOf(postId));
         return { integrationId, commentId, hidden: hide };
       },
-      { postId }
+      { postId, capability: 'hide' }
     );
   }
 
@@ -190,10 +198,10 @@ export class YsocialInboxService {
       commentId,
       actorHeader,
       async (provider, channel) => {
-        await provider.remove(channel, commentId);
+        await provider.remove(channel, commentId, hintOf(postId));
         return { integrationId, commentId, deleted: true };
       },
-      { postId, confirmed: confirmDelete }
+      { postId, confirmed: confirmDelete, capability: 'delete' }
     );
   }
 
@@ -212,7 +220,7 @@ export class YsocialInboxService {
       commentId,
       actorHeader,
       async (provider, channel) => {
-        await provider.like(channel, commentId, like);
+        await provider.like(channel, commentId, like, hintOf(postId));
         return { integrationId, commentId, liked: like };
       },
       { postId, capability: 'like' }
@@ -510,7 +518,7 @@ export class YsocialInboxService {
       throw reject({ status: 409, code: 'channel_inactive', flag });
     }
     const provider = this.providers[row.providerIdentifier];
-    if (!provider) {
+    if (!provider || provider.enabled?.(process.env) === false) {
       throw reject({
         status: 409,
         code: 'provider_not_supported',
