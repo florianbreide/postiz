@@ -14,6 +14,7 @@ import {
   POST_FIELDS,
   YsocialReadRepository,
 } from '../database/ysocial.read.repository';
+import { hasInternalPlug } from '../automation/automation.rules';
 import { inOwnStorage, storageLocation } from '../deletion/deletion.rules';
 import { sanitizeReason } from '../events/hub.event';
 import { channelFlag, ChannelRow } from '../health/channel.health';
@@ -208,12 +209,8 @@ const media = (row: PostRow, sizes: MediaSizes) =>
 
 // Whether the post triggers an internal plug: another channel likes,
 // reposts or comments it after the post went out (D15, PR 52 of the hub).
-// Postiz runs one for every channel in plug--<plug>--integrations of the
-// settings (PostsService.checkInternalPlug, every key with "plug-", split by
-// "--"), whatever plug--<plug>--active says. Only this yes or no goes out,
-// never the settings. Unreadable settings: false, the workflow of Postiz
-// fails on them before any plug. A part named __proto__ counts as yes: a
-// missed automatic post is the worse mistake.
+// Only this yes or no goes out, never the settings. Unreadable settings:
+// false, the workflow of Postiz fails on them before any plug.
 const plug = (value: string | null) => {
   let settings: unknown;
   try {
@@ -221,21 +218,7 @@ const plug = (value: string | null) => {
   } catch {
     return false;
   }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-    return false;
-  }
-  return Object.entries(settings).some(([key, channels]) => {
-    if (key.indexOf('plug-') === -1) {
-      return false;
-    }
-    const [, name, field] = key.split('--');
-    if (name === '__proto__' || field === '__proto__') {
-      return true;
-    }
-    return (
-      field === 'integrations' && Array.isArray(channels) && channels.length > 0
-    );
-  });
+  return hasInternalPlug(settings);
 };
 
 const toPost = async (row: PostRow, sizes: MediaSizes) => ({

@@ -265,6 +265,23 @@ Test gegen einen echten Temporal-Server, sonst übersprungen. Er nutzt nur den N
 
 Er belegt: Ein Lauf, der ohne Codec beginnt, läuft nach dem Einschalten weiter. Im Verlauf eines neuen Laufs steht der Token nirgends, auch nicht in Fehlermeldungen. Das Fehler-JSON im Workflow ist dasselbe wie ohne Codec. Ein Client ohne Codec kann die Ergebnisse nicht lesen. Die Startprüfung weist ohne und mit falschem Schlüssel ab.
 
+## Sperre automatischer Posts (Backend, ab 0.10.3, D15)
+
+Regel 2: kein Post ohne Freigabe eines Menschen. Postiz kann ohne neue Freigabe posten, über drei Wege. Der Fork sperrt alle drei dort, wo sie gesetzt werden (`YsocialAutomationMiddleware`, angehängt in `YsocialModule.configure`, ohne Patch). Die Regeln stehen in `libraries/ysocial/src/automation/automation.rules.ts`, die Übersicht im Hub unter `infra/README.md` Abschnitt 24.
+
+| Weg in Postiz | Route | gesperrt, wenn |
+|---|---|---|
+| Wiederholung („Repeat Post“ im Editor, `inter`, gespeichert als `intervalInDays`) | `POST /posts`, `POST /public/v1/posts` | `inter` größer als 0 |
+| Interner Plug im Editor (etwa LinkedIn „Add Re-posters“, `plug--<Plug>--integrations` in `posts[].settings`) | dieselben, dazu `PUT /public/v1/posts/:id/settings` (Settings eines Posts nachträglich) | mindestens ein Kanal in der Liste. Der Schalter `plug--<Plug>--active` zählt nicht, Postiz wertet ihn nicht aus (wie `plug` in der Lese-API) |
+| Globaler Plug je Kanal (Einstellungen → „Plugs“, Tabelle `Plugs`, etwa LinkedIn Auto-Repost ab n Likes) | `POST /integrations/:id/plugs` (legt mit `activated: true` an), `PUT /integrations/plugs/:id/activate` | immer beim Anlegen, beim Einschalten mit einem `status`, der als wahr gilt (Postiz speichert `!!status`, auch `1` oder `"false"`). Abschalten bleibt erlaubt |
+
+- Antwort: 403 `{"code":"automation_blocked","message":"Wiederholungen und Plugs sind gesperrt, Posts laufen über das Studio (Regel 2)."}`, bevor der Controller von Postiz läuft. Der Editor zeigt die Meldung beim Speichern. Ein bestehender Post mit Wiederholung lässt sich erst wieder speichern, wenn man „Repeat Post“ entfernt. Unter Einstellungen → „Plugs“ meldet Postiz trotz der Sperre „Plug updated“ und zeigt den Schalter an, bis man neu lädt. Maßgeblich ist dort die Logzeile `automation blocked`.
+- Kein Schalter: Die Regel gilt für jeden Kanal, auch für die von Y Social. Der Hub plant über `POST /public/v1/posts` ohne Wiederholung und ohne Plug ein, er ist nicht betroffen.
+- Log: `automation blocked method=<POST|PUT> reason=<repeat|plug|global-plug>`, nie der Inhalt.
+- **Altbestand:** Beim Start zählt `YsocialAutomationCheck` Posts mit Wiederholung und Posts mit internem Plug, je Thread (`parentPostId` leer), auch schon veröffentlichte, und aktive globale Plugs (nur Kanäle ohne `deletedAt`). Im Log steht `automation check repeats=<n> plugs=<n> globalPlugs=<n>`, über 0 als Warnung mit „in Postiz abschalten“. Der Start läuft weiter. Die Posts meldet der Hub ohnehin als Alarm „Automatisch in Postiz“, die globalen Plugs nur dieser Log.
+- **Upstream:** Ein Test liest die Routen und den Namen `inter` aus den Quellen von Postiz. Benennt Postiz sie um, wird er rot. Dazu kommt ein Schritt im Sync-Testplan (`docs/STAGING-TESTPLAN.md`, Schritt 15).
+- **Grenzen:** Andere Wege, die Postiz später einführt, sind nicht gesperrt, bis sie hier stehen. Der KI-Agent in der Oberfläche (`POST /copilot/agent`, nur wenn konfiguriert) plant über `integrationSchedulePostTool` direkt mit `createPost` ein, ein interner Plug in seinen Settings ginge an der Sperre vorbei. Er setzt keine Wiederholung, und bei uns ist er nicht konfiguriert. Das MCP und `/public/v1/*` sperrt Caddy von außen ohnehin (Hub `infra/README.md` 7). Postiz-Befehle aus `apps/commands` laufen ohne das ysocial-Modul.
+
 ## Lese-API für den Hub (Backend, PR 18, Inhalt seit PR 36)
 
 Hinter `YsocialTokenGuard` wie `/ysocial/status`, von außen gesperrt (`/api/ysocial/*`):
