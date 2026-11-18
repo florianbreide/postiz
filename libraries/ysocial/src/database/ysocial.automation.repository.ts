@@ -4,8 +4,8 @@ import { PrismaRepository } from '@gitroom/nestjs-libraries/database/prisma/pris
 /**
  * Read-only counts for the start check of automatic posts (D15,
  * YsocialAutomationCheck), one per thread (parentPostId null, Postiz writes
- * both fields into every row of it): repeating posts, posts whose settings may hold an
- * internal plug, active global plugs. Only settings leaves this repository,
+ * both fields into every row of it): repeating posts, posts whose settings
+ * may hold an internal plug, active global plugs. Only settings leaves this repository,
  * and only for the check, never a text or a token.
  */
 @Injectable()
