@@ -137,6 +137,7 @@ describeIt('token encryption with a real database', () => {
     DATABASE_URL: process.env.DATABASE_URL,
     KEY: process.env[YSOCIAL_TOKEN_KEY_ENV],
     STRIPE: process.env.STRIPE_SECRET_KEY,
+    ENCRYPTION: process.env.ENCRYPTION_PROVIDER,
   };
   const keyBase64 = newKeyBase64();
   const key = readYsocialTokenKey({
@@ -148,6 +149,7 @@ describeIt('token encryption with a real database', () => {
   let raw: any; // a second, plain client: the stored values
   let repo: (name: string) => any;
   let integrationRepository: any;
+  let encryptionService: any;
   let url: string;
 
   const stored = async (id: string) =>
@@ -226,6 +228,13 @@ describeIt('token encryption with a real database', () => {
     const {
       IntegrationRepository,
     } = require('@gitroom/nestjs-libraries/database/prisma/integrations/integration.repository');
+    // Since Postiz v2.26.0 the repository takes the EncryptionService of
+    // Postiz. Without ENCRYPTION_PROVIDER it passes the values through, our
+    // extension encrypts below it (YSOCIAL-PATCHES.md).
+    const {
+      EncryptionService,
+    } = require('@gitroom/nestjs-libraries/services/encryption.service');
+    delete process.env.ENCRYPTION_PROVIDER;
 
     prisma = new PrismaService();
     raw = new PrismaClient({ datasources: { db: { url } } });
@@ -236,7 +245,8 @@ describeIt('token encryption with a real database', () => {
       repo('plugs'),
       repo('exisingPlugData'),
       repo('customer'),
-      repo('mentions')
+      repo('mentions'),
+      (encryptionService = new EncryptionService())
     );
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
   }, 120_000);
@@ -248,6 +258,7 @@ describeIt('token encryption with a real database', () => {
       ['DATABASE_URL', saved.DATABASE_URL],
       [YSOCIAL_TOKEN_KEY_ENV, saved.KEY],
       ['STRIPE_SECRET_KEY', saved.STRIPE],
+      ['ENCRYPTION_PROVIDER', saved.ENCRYPTION],
     ] as const) {
       if (value === undefined) {
         delete process.env[name];
@@ -935,7 +946,8 @@ describeIt('token encryption with a real database', () => {
         repo('comments'),
         repo('tags'),
         repo('tagsPosts'),
-        repo('errors')
+        repo('errors'),
+        encryptionService
       );
       const postsService = new PostsService(
         postsRepository,
@@ -951,11 +963,21 @@ describeIt('token encryption with a real database', () => {
       const temporal = {
         client: { getRawClient: () => ({ workflow: rawWorkflow }) },
       };
+      // Since Postiz v2.26.0 the activity decrypts the tokens of a channel
+      // through IntegrationService.decryptTokens, a pass-through without
+      // ENCRYPTION_PROVIDER.
+      const integrationService = {
+        decryptTokens: async (integration: unknown) =>
+          encryptionService.decryptFields(integration, [
+            'token',
+            'refreshToken',
+          ]),
+      };
       const activity = new PostActivity(
         postsService,
         {},
         manager,
-        {},
+        integrationService,
         {},
         {},
         temporal,
@@ -981,7 +1003,7 @@ describeIt('token encryption with a real database', () => {
       expect((await stored(created.id)).token.startsWith('ys1:')).toBe(true);
     });
 
-    it('d) the channel list and lookup by id return plaintext', async () => {
+    it('d) the channel list carries no tokens, the lookup by id the plaintext', async () => {
       const org = await makeOrg();
       await integrationRepository.createOrUpdateIntegration(
         undefined,
@@ -998,8 +1020,10 @@ describeIt('token encryption with a real database', () => {
       );
       const list = await integrationRepository.getIntegrationsList(org.id);
       expect(list).toHaveLength(1);
-      expect(list[0].token).toBe('list-token');
-      expect(list[0].refreshToken).toBe('list-refresh');
+      // Since Postiz v2.26.0 the list omits the tokens (omit in
+      // getIntegrationsList), the extension computes nothing for them.
+      expect(list[0].token).toBeUndefined();
+      expect(list[0].refreshToken).toBeUndefined();
 
       const byId = await integrationRepository.getIntegrationById(
         org.id,
