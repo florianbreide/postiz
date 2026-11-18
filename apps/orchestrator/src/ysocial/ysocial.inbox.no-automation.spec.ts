@@ -205,6 +205,8 @@ describe('inbox demo and automation (rule 2)', () => {
       // The two providers share the Graph call of meta.graph.ts.
       'libraries/ysocial/src/inbox/instagram.inbox.ts',
       'libraries/ysocial/src/inbox/facebook.inbox.ts',
+      // LinkedIn brings its own call (PR 75).
+      'libraries/ysocial/src/inbox/linkedin.inbox.ts',
       'apps/backend/src/ysocial/ysocial.inbox.controller.ts',
       'apps/backend/src/ysocial/ysocial.module.ts',
       'libraries/ysocial/src/dtos/ysocial.inbox.dto.ts',
@@ -213,7 +215,7 @@ describe('inbox demo and automation (rule 2)', () => {
     ];
     const IMPORT = /(?:from|import\(|require\()\s*['"]([^'"]+)['"]/g;
     const INBOX_SPECIFIER =
-      /(^|\/)inbox\/|instagram\.inbox|facebook\.inbox|meta\.graph|ysocial\.inbox\.service/;
+      /(^|\/)inbox\/|instagram\.inbox|facebook\.inbox|linkedin\.inbox|meta\.graph|ysocial\.inbox\.service/;
 
     const roots = ['apps', 'libraries'].flatMap((top) =>
       readdirSync(join(ROOT, top))

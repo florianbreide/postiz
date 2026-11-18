@@ -21,6 +21,7 @@ import {
   isIntegrationId,
   isPlatformId,
   mentionNames,
+  taggedPart,
   YSOCIAL_DEMO_INTEGRATIONS_ENV,
   YSOCIAL_INBOX_ENABLED_ENV,
 } from './inbox.rules';
@@ -518,5 +519,43 @@ describe('mentionNames (W76)', () => {
 
   it('gives [] for no names', () => {
     expect(mentionNames([])).toEqual([]);
+  });
+});
+
+describe('taggedPart', () => {
+  it('cuts the part of the text by offset and length', () => {
+    expect(taggedPart('Danke Erika, super!', 6, 5)).toBe('Erika');
+    expect(taggedPart('Danke', 0, 5)).toBe('Danke');
+  });
+
+  it('counts in UTF-16 units', () => {
+    expect(taggedPart('😀 Erika', 3, 5)).toBe('Erika');
+  });
+
+  it.each([
+    ['an offset below 0', -1, 2],
+    ['a length below 1', 2, 0],
+    ['a part that ends outside the text', 3, 10],
+    ['an offset outside the text', 10, 1],
+    ['fractions', 1.5, 2],
+    ['NaN', NaN, 2],
+    ['Infinity', 0, Infinity],
+  ])('is null for %s', (_name, offset, length) => {
+    expect(taggedPart('Danke', offset, length)).toBeNull();
+  });
+
+  it.each([
+    ['strings', '1', '2'],
+    ['null', null, null],
+    ['undefined', undefined, undefined],
+    ['objects', {}, []],
+  ])('is null for %s', (_name, offset, length) => {
+    expect(taggedPart('Danke', offset, length)).toBeNull();
+  });
+
+  it('is null when the part would cut a surrogate pair', () => {
+    expect(taggedPart('A😀B', 1, 1)).toBeNull();
+    expect(taggedPart('A😀B', 2, 1)).toBeNull();
+    expect(taggedPart('A😀B', 1, 2)).toBe('😀');
   });
 });

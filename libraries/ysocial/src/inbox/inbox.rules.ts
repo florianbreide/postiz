@@ -90,6 +90,31 @@ export interface InboxReply {
 export const INBOX_MENTIONS_LIMIT = 50;
 export const INBOX_MENTION_MAX_LENGTH = 300;
 
+// The part of a text a tag covers. A tag shortened to the first name shows
+// only that in the text, while its name stays the full name (W76). Assumed:
+// the platform counts offset and length in UTF-16 units, like a JavaScript
+// string (ungeprüft, README). null outside the text or when the part would
+// cut a surrogate pair.
+export const taggedPart = (
+  message: string,
+  offset: unknown,
+  length: unknown
+): string | null => {
+  if (
+    typeof offset !== 'number' ||
+    typeof length !== 'number' ||
+    !Number.isInteger(offset) ||
+    !Number.isInteger(length) ||
+    offset < 0 ||
+    length < 1 ||
+    offset + length > message.length
+  ) {
+    return null;
+  }
+  const part = message.slice(offset, offset + length);
+  return /^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(part) ? null : part;
+};
+
 // The entries of mentions: strings only, trimmed and cut, without empty
 // ones and doubles, in order.
 // A cut never leaves half of a surrogate pair at the end.
@@ -299,6 +324,9 @@ const finite = (value: unknown) =>
 export interface YsocialInboxProvider {
   identifier: string;
   capabilities: InboxCapabilities;
+  // A platform whose inbox needs its own switch (LinkedIn, PR 75): false,
+  // and the routes answer provider_not_supported. Without it: always on.
+  enabled?(env: NodeJS.ProcessEnv): boolean;
   listComments(channel: InboxChannel): Promise<InboxPost[]>;
   // Comments and replies of the posts in the window (PR 73).
   listItems(
@@ -317,8 +345,14 @@ export interface YsocialInboxProvider {
     usage: InboxUsageMeter,
     postId?: string | null
   ): Promise<{ post: InboxItemPost | null; items: InboxItem[] } | null>;
-  // Only where capabilities.like is true; the service checks before.
-  like(channel: InboxChannel, commentId: string, like: boolean): Promise<void>;
+  // The writes below run only after ownsComment with the same postId (the
+  // hint, already checked there), and only where the capability is true.
+  like(
+    channel: InboxChannel,
+    commentId: string,
+    like: boolean,
+    postId?: string | null
+  ): Promise<void>;
   // true only if the comment is on a post of this channel. postId and the
   // error as for getConversation.
   ownsComment(
@@ -330,10 +364,20 @@ export interface YsocialInboxProvider {
   reply(
     channel: InboxChannel,
     commentId: string,
-    message: string
+    message: string,
+    postId?: string | null
   ): Promise<{ id: string | null }>;
-  hide(channel: InboxChannel, commentId: string, hide: boolean): Promise<void>;
-  remove(channel: InboxChannel, commentId: string): Promise<void>;
+  hide(
+    channel: InboxChannel,
+    commentId: string,
+    hide: boolean,
+    postId?: string | null
+  ): Promise<void>;
+  remove(
+    channel: InboxChannel,
+    commentId: string,
+    postId?: string | null
+  ): Promise<void>;
   // Webhooks of the demo (PR B): our app on the Page of the channel and
   // the Page fields it receives.
   webhookSubscription(

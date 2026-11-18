@@ -17,6 +17,7 @@ import {
   InboxWindow,
   inboxWindow,
   mentionNames,
+  taggedPart,
   YsocialInboxProvider,
 } from './inbox.rules';
 import {
@@ -148,27 +149,6 @@ const isPageId = (value: unknown): value is string =>
 const isFacebookId = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 64 && /^\d+(_\d+)?$/.test(value);
 
-// The part of the text a tag covers. A tag shortened to the first name
-// shows only that in the text, while name stays the full name (W76).
-// Assumed: Meta counts offset and length in UTF-16 units, like a JavaScript
-// string (ungeprüft, README). null outside the text or when the part would
-// cut a surrogate pair.
-const taggedText = (message: string, tag: GraphObject) => {
-  const offset = tag?.offset;
-  const length = tag?.length;
-  if (
-    !Number.isInteger(offset) ||
-    !Number.isInteger(length) ||
-    offset < 0 ||
-    length < 1 ||
-    offset + length > message.length
-  ) {
-    return null;
-  }
-  const part = message.slice(offset, offset + length);
-  return /^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(part) ? null : part;
-};
-
 // from.name only, never the Page-scoped id of the person. fromOwner: written
 // by the Page of the channel. mentions: per tag of message_tags its name and
 // the part of the text it covers, never an id.
@@ -186,7 +166,7 @@ const toReply = (row: GraphObject, pageId: string): InboxReply => {
       Array.isArray(row.message_tags)
         ? row.message_tags.flatMap((tag: GraphObject) => [
             tag?.name,
-            taggedText(message, tag),
+            taggedPart(message, tag?.offset, tag?.length),
           ])
         : []
     ),
