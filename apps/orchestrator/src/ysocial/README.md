@@ -193,7 +193,9 @@ Postiz speichert `Integration.token` und `refreshToken` verschlüsselt, sobald `
 **Startprüfung** (`YsocialTokenKeyCheck`, in Backend und Orchestrator). Nest wartet beim Aufbau der Provider auf sie. Schlägt sie fehl, beendet sich der Prozess mit Exit-Code 1, bevor ein Port oder ein Temporal-Worker startet. pm2 startet ihn neu, die Meldung steht dann bei jedem Versuch im Log. Sie schlägt fehl, wenn:
 - `YSOCIAL_TOKEN_KEY` gesetzt ist, aber nicht genau 32 Byte als Base64 ergibt,
 - der Schlüssel fehlt, es aber verschlüsselte Tokens gibt,
-- Tokens mit einem anderen Schlüssel verschlüsselt sind. Die Meldung nennt beide `<kid>`, nie einen Token.
+- Tokens mit einem anderen Schlüssel verschlüsselt sind. Die Meldung nennt beide `<kid>`, nie einen Token,
+- `ENCRYPTION_PROVIDER` gesetzt ist (ab 0.10.2), die Token-Verschlüsselung von Postiz seit v2.26.0. Das ysocial-Modul liest die Tokens über Prisma unterhalb von ihr und bekäme sonst die Chiffre (`YSOCIAL-PATCHES.md`),
+- ein Token mit dem Präfix `enc:v1:` von Postiz gespeichert ist, direkt oder unter unserer Verschlüsselung (ab 0.10.2, dafür liest die Prüfung jede Zeile mit dem eigenen Schlüssel, eine je Kanal). Die Meldung nennt nur die Zahl der Kanäle. Ausweg: die Kanäle neu verbinden, denn ohne den Schlüssel von Postiz lässt sich `enc:v1:` nicht lesen. `apps/commands` von Postiz hat diese Prüfung nicht, dort `ENCRYPTION_PROVIDER` ebenso nie setzen.
 
 Läuft alles, steht im Log `token encryption on (key <kid>)`, ohne Schlüssel `token encryption off: …`.
 
