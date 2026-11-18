@@ -25,6 +25,8 @@ import { TemporalService } from 'nestjs-temporal-core';
 import { YsocialReadRepository } from '../../../../libraries/ysocial/src/database/ysocial.read.repository';
 import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/database/ysocial.retry.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
+import { YsocialAutomationRepository } from '../../../../libraries/ysocial/src/database/ysocial.automation.repository';
+import { YsocialAutomationCheck } from '../../../../libraries/ysocial/src/automation/ysocial.automation.check';
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialRetryService } from '../../../../libraries/ysocial/src/retry/ysocial.retry.service';
@@ -117,6 +119,10 @@ describe('POST /ysocial/posts/:id/retry', () => {
       .overrideProvider(YsocialRetryRepository)
       .useValue(repository)
       .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
+      .overrideProvider(YsocialAutomationRepository)
+      .useValue({})
+      .overrideProvider(YsocialAutomationCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue({})

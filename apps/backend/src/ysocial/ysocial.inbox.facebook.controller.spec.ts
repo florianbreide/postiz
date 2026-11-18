@@ -28,6 +28,8 @@ import { YsocialRetryRepository } from '../../../../libraries/ysocial/src/databa
 import { YsocialInboxRepository } from '../../../../libraries/ysocial/src/database/ysocial.inbox.repository';
 import { YsocialWebhookRepository } from '../../../../libraries/ysocial/src/database/ysocial.webhook.repository';
 import { YsocialTokenKeyCheck } from '../../../../libraries/ysocial/src/tokens/ysocial.token.key.check';
+import { YsocialAutomationRepository } from '../../../../libraries/ysocial/src/database/ysocial.automation.repository';
+import { YsocialAutomationCheck } from '../../../../libraries/ysocial/src/automation/ysocial.automation.check';
 
 const TOKEN_ENV = 'YSOCIAL_SERVICE_TOKEN';
 const LIST_ENV = 'YSOCIAL_DEMO_INTEGRATIONS';
@@ -204,6 +206,10 @@ describe('/ysocial/inbox with a Facebook Page', () => {
       .overrideProvider(YsocialRetryRepository)
       .useValue({})
       .overrideProvider(YsocialTokenKeyCheck)
+      .useValue({})
+      .overrideProvider(YsocialAutomationRepository)
+      .useValue({})
+      .overrideProvider(YsocialAutomationCheck)
       .useValue({})
       .overrideProvider(YsocialInboxRepository)
       .useValue(repository)
