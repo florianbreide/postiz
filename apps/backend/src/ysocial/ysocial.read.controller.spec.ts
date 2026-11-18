@@ -5,7 +5,10 @@ jest.mock(
   () => ({ PostsService: class PostsService {} })
 );
 
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { format } from 'util';
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -116,9 +119,33 @@ const comment = (id: string, parentPostId: string | null, text: string) => ({
 const comment1 = comment('post-2', 'post-1', 'Erfundener Kommentar 1');
 const comment2 = comment('post-3', 'post-2', 'Erfundener Kommentar 2');
 
+// The media library rows of the two media in postImage (K6).
+const mediaRows = [
+  {
+    id: 'media-1',
+    organizationId: 'org-1',
+    path: 'https://uploads.example.com/2026/10/bild.png',
+    fileSize: 1234,
+  },
+  {
+    id: 'media-2',
+    organizationId: 'org-1',
+    path: 'https://uploads.example.com/2026/10/clip.mp4',
+    fileSize: 56789,
+  },
+];
+
 const expectedMedia = [
-  { path: 'https://uploads.example.com/2026/10/bild.png', type: 'image' },
-  { path: 'https://uploads.example.com/2026/10/clip.mp4', type: 'video' },
+  {
+    path: 'https://uploads.example.com/2026/10/bild.png',
+    type: 'image',
+    size: 1234,
+  },
+  {
+    path: 'https://uploads.example.com/2026/10/clip.mp4',
+    type: 'video',
+    size: 56789,
+  },
 ];
 
 describe('read API field lists', () => {
@@ -222,6 +249,7 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     getPosts: jest.fn().mockResolvedValue([postRow]),
     getPost: jest.fn(),
     getPostGroup: jest.fn(),
+    getMedia: jest.fn(),
   };
   let app: INestApplication;
   let baseUrl: string;
@@ -254,6 +282,8 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
   beforeEach(() => {
     repository.getPost.mockReset();
     repository.getPostGroup.mockReset();
+    repository.getMedia.mockReset();
+    repository.getMedia.mockResolvedValue(mediaRows);
     repository.getPost.mockImplementation(
       async (id: string) =>
         [postRow, comment1, comment2].find((row) => row.id === id) || null
@@ -337,6 +367,9 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     expect(body[0].plug).toBe(false);
     expect(body[0].content).toBe(postText);
     expect(body[0].image).toEqual(expectedMedia);
+    for (const item of body[0].image) {
+      expect(Object.keys(item).sort()).toEqual(['path', 'size', 'type']);
+    }
     expect(body[0].error).toBe(
       'failed: https://graph.facebook.com/x?access_token=***'
     );
@@ -605,6 +638,227 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
     });
   });
 
+  // Size and sha256 of a medium (K6).
+  describe('size and sha256', () => {
+    const listPath =
+      '/ysocial/posts?from=2026-10-27T00:00:00Z&to=2026-10-28T00:00:00Z';
+    const names = ['FRONTEND_URL', 'UPLOAD_DIRECTORY', 'STORAGE_PROVIDER'];
+    const saved: Record<string, string | undefined> = {};
+    let directory: string;
+    const base = 'https://hub.example.test';
+
+    beforeEach(() => {
+      for (const name of names) {
+        saved[name] = process.env[name];
+      }
+      directory = mkdtempSync(join(tmpdir(), 'ysocial-read-'));
+      process.env.FRONTEND_URL = base;
+      process.env.UPLOAD_DIRECTORY = directory;
+      delete process.env.STORAGE_PROVIDER;
+    });
+
+    afterEach(() => {
+      for (const name of names) {
+        if (saved[name] === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = saved[name];
+        }
+      }
+      rmSync(directory, { recursive: true, force: true });
+    });
+
+    const withImage = (row: typeof postRow, image: object[]) => ({
+      ...row,
+      image: JSON.stringify(image),
+    });
+
+    it('posts: size of every medium, never sha256, one query', async () => {
+      const body = await (await get(listPath)).json();
+      expect(body[0].image).toEqual(expectedMedia);
+      expect(JSON.stringify(body)).not.toContain('sha256');
+      expect(repository.getMedia).toHaveBeenCalledTimes(1);
+      expect(repository.getMedia).toHaveBeenCalledWith(['media-1', 'media-2']);
+    });
+
+    it('posts: one query for all posts, with deduplicated ids', async () => {
+      repository.getPosts.mockResolvedValueOnce([
+        postRow,
+        { ...postRow, id: 'post-5' },
+        withImage(postRow, [
+          { id: 'media-2', path: mediaRows[1].path },
+          { id: 'media-3', path: 'https://uploads.example.com/c.png' },
+        ]),
+      ]);
+      await get(listPath);
+      expect(repository.getMedia).toHaveBeenCalledTimes(1);
+      expect(repository.getMedia).toHaveBeenCalledWith([
+        'media-1',
+        'media-2',
+        'media-3',
+      ]);
+    });
+
+    it('posts: no query when no medium has an id', async () => {
+      repository.getPosts.mockResolvedValueOnce([
+        withImage(postRow, [{ path: mediaRows[0].path }]),
+        { ...postRow, id: 'post-5', image: '[]' },
+        { ...postRow, id: 'post-6', image: null },
+      ]);
+      const body = await (await get(listPath)).json();
+      expect(repository.getMedia).not.toHaveBeenCalled();
+      expect(body[0].image).toEqual([
+        { path: mediaRows[0].path, type: 'image', size: null },
+      ]);
+    });
+
+    it.each([
+      ['another organization', { organizationId: 'org-2' }],
+      ['another path', { path: 'https://uploads.example.com/other.png' }],
+      ['a file size of 0', { fileSize: 0 }],
+    ])('posts: size is null for %s', async (_name, change) => {
+      repository.getMedia.mockResolvedValue([
+        { ...mediaRows[0], ...change },
+        mediaRows[1],
+      ]);
+      const body = await (await get(listPath)).json();
+      expect(body[0].image[0].size).toBeNull();
+      expect(body[0].image[1].size).toBe(56789);
+    });
+
+    it('posts: size is null when the id has no row', async () => {
+      repository.getMedia.mockResolvedValue([mediaRows[1]]);
+      const body = await (await get(listPath)).json();
+      expect(body[0].image[0].size).toBeNull();
+      expect(body[0].image[1].size).toBe(56789);
+    });
+
+    it('posts: size is null for a medium without an id in the JSON', async () => {
+      repository.getPosts.mockResolvedValueOnce([
+        withImage(postRow, [
+          { path: mediaRows[0].path },
+          { id: 'media-2', path: mediaRows[1].path },
+        ]),
+      ]);
+      const body = await (await get(listPath)).json();
+      expect(body[0].image.map((item: any) => item.size)).toEqual([
+        null,
+        56789,
+      ]);
+      expect(repository.getMedia).toHaveBeenCalledWith(['media-2']);
+    });
+
+    it('posts: id, alt and thumbnail stay out of the answer', async () => {
+      const text = await (await get(listPath)).text();
+      expect(text).not.toContain('"id":"media-');
+      expect(text).not.toContain('"alt"');
+      expect(text).not.toContain('"thumbnail"');
+      expect(text).not.toContain('clip-thumb');
+    });
+
+    it('posts/:id: size, and no sha256 field without ?media=sha256, one query', async () => {
+      const commentWithMedia = {
+        ...comment1,
+        image: JSON.stringify([{ id: 'media-1', path: mediaRows[0].path }]),
+      };
+      repository.getPostGroup.mockResolvedValue([
+        postRow,
+        commentWithMedia,
+        comment2,
+      ]);
+      const body = await (await get('/ysocial/posts/post-1')).json();
+      expect(body.image.map((item: any) => item.size)).toEqual([1234, 56789]);
+      expect(body.comments[0].image).toEqual([
+        { path: mediaRows[0].path, type: 'image', size: 1234 },
+      ]);
+      expect(JSON.stringify(body)).not.toContain('sha256');
+      expect(repository.getMedia).toHaveBeenCalledTimes(1);
+      expect(repository.getMedia).toHaveBeenCalledWith(['media-1', 'media-2']);
+    });
+
+    it.each([
+      ['media=md5'],
+      ['media='],
+      ['media=SHA256'],
+      ['media=sha256&media=md5'],
+    ])('posts/:id?%s answers 400', async (query) => {
+      const res = await get(`/ysocial/posts/post-1?${query}`);
+      expect(res.status).toBe(400);
+      expect(repository.getPost).not.toHaveBeenCalled();
+    });
+
+    it('posts/:id?media=sha256 needs the service token', async () => {
+      expect((await get('/ysocial/posts/post-1?media=sha256', '')).status).toBe(
+        401
+      );
+    });
+
+    it('posts/:id: size of the file in the upload folder for fileSize 0', async () => {
+      writeFileSync(join(directory, 'null.png'), Buffer.alloc(77));
+      const path = `${base}/uploads/null.png`;
+      repository.getMedia.mockResolvedValue([
+        { ...mediaRows[0], path, fileSize: 0 },
+      ]);
+      repository.getPost.mockResolvedValue({
+        ...postRow,
+        image: JSON.stringify([{ id: 'media-1', path }]),
+      });
+      repository.getPostGroup.mockResolvedValue([]);
+      const body = await (await get('/ysocial/posts/post-1')).json();
+      expect(body.image).toEqual([{ path, type: 'image', size: 77 }]);
+    });
+
+    it('posts/:id: sha256 of the files in the upload folder, for post and comments', async () => {
+      mkdirSync(join(directory, '2026'));
+      const bytes = Buffer.from('erfundene Bilddaten');
+      writeFileSync(join(directory, '2026', 'bild.png'), bytes);
+      writeFileSync(join(directory, '2026', 'clip.mp4'), 'erfundenes Video');
+      const url = (name: string) => `${base}/uploads/2026/${name}`;
+      const rows = [
+        { ...mediaRows[0], path: url('bild.png') },
+        { ...mediaRows[1], path: url('clip.mp4') },
+      ];
+      repository.getMedia.mockResolvedValue(rows);
+      const image = JSON.stringify([
+        { id: 'media-1', path: rows[0].path },
+        { id: 'media-2', path: rows[1].path },
+        { id: 'media-1', path: url('fehlt.png') },
+      ]);
+      repository.getPost.mockResolvedValue({ ...postRow, image });
+      repository.getPostGroup.mockResolvedValue([
+        { ...postRow, image },
+        { ...comment1, image },
+      ]);
+      const res = await get('/ysocial/posts/post-1?media=sha256');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const sha = (value: string | Buffer) =>
+        createHash('sha256').update(value).digest('hex');
+      const expected = [
+        { path: rows[0].path, type: 'image', size: 1234, sha256: sha(bytes) },
+        {
+          path: rows[1].path,
+          type: 'video',
+          size: 56789,
+          sha256: sha('erfundenes Video'),
+        },
+        // Not the file of this path in the library: no size, no file.
+        { path: url('fehlt.png'), type: 'image', size: null, sha256: null },
+      ];
+      expect(body.image).toEqual(expected);
+      expect(body.comments[0].image).toEqual(expected);
+    });
+
+    it('posts/:id: sha256 is null for a medium outside the local storage', async () => {
+      process.env.STORAGE_PROVIDER = 'cloudflare';
+      const body = await (
+        await get('/ysocial/posts/post-1?media=sha256')
+      ).json();
+      expect(body.image.map((item: any) => item.sha256)).toEqual([null, null]);
+      expect(body.image.map((item: any) => item.size)).toEqual([1234, 56789]);
+    });
+  });
+
   it('no route ever answers with a forbidden field or a secret value', async () => {
     for (const path of routes) {
       const text = await (await get(path)).text();
@@ -615,7 +869,7 @@ describe('GET /ysocial/customers, /integrations, /posts, /posts/:id', () => {
         expect(text).not.toContain(value);
       }
       expect(text).not.toContain('EAAGsecret');
-      // Of the media only path and type.
+      // Of the media only path, type and size (sha256 on one post).
       expect(text).not.toContain('media-1');
       expect(text).not.toContain('Erfundener Alt-Text');
       expect(text).not.toContain('clip-thumb.jpg');
@@ -686,6 +940,7 @@ describe('media of a post', () => {
   const imageOf = async (image: string | null) => {
     const service = new YsocialReadService({
       getPosts: jest.fn().mockResolvedValue([postWithImage(image)]),
+      getMedia: jest.fn().mockResolvedValue([]),
     } as unknown as YsocialReadRepository);
     const [post] = await service.getPosts(
       '2026-10-27T00:00:00Z',
@@ -704,7 +959,7 @@ describe('media of a post', () => {
     expect(await imageOf(image)).toEqual([]);
   });
 
-  it('skips entries without a path and keeps only path and type', async () => {
+  it('skips entries without a path and keeps only path, type and size', async () => {
     expect(
       await imageOf(
         JSON.stringify([
@@ -721,8 +976,8 @@ describe('media of a post', () => {
         ])
       )
     ).toEqual([
-      { path: 'https://uploads.example.com/a.PNG', type: 'image' },
-      { path: 'https://uploads.example.com/b.MP4', type: 'video' },
+      { path: 'https://uploads.example.com/a.PNG', type: 'image', size: null },
+      { path: 'https://uploads.example.com/b.MP4', type: 'video', size: null },
     ]);
   });
 });
@@ -732,6 +987,7 @@ describe('thread order of the comments', () => {
     const service = new YsocialReadService({
       getPost: jest.fn().mockResolvedValue(postRow),
       getPostGroup: jest.fn().mockResolvedValue(group),
+      getMedia: jest.fn().mockResolvedValue([]),
     } as unknown as YsocialReadRepository);
     const body = await service.getPost('post-1');
     return body.comments.map((row) => row.id);
