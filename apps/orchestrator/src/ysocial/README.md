@@ -195,7 +195,7 @@ Postiz speichert `Integration.token` und `refreshToken` verschlüsselt, sobald `
 - der Schlüssel fehlt, es aber verschlüsselte Tokens gibt,
 - Tokens mit einem anderen Schlüssel verschlüsselt sind. Die Meldung nennt beide `<kid>`, nie einen Token,
 - `ENCRYPTION_PROVIDER` gesetzt ist (ab 0.10.2), die Token-Verschlüsselung von Postiz seit v2.26.0. Das ysocial-Modul liest die Tokens über Prisma unterhalb von ihr und bekäme sonst die Chiffre (`YSOCIAL-PATCHES.md`),
-- ein Token mit dem Präfix `enc:v1:` von Postiz gespeichert ist, direkt oder unter unserer Verschlüsselung (ab 0.10.2, dafür liest die Prüfung jede Zeile mit dem eigenen Schlüssel, eine je Kanal). Die Meldung nennt nur die Zahl der Kanäle. Ausweg: die Kanäle neu verbinden, denn ohne den Schlüssel von Postiz lässt sich `enc:v1:` nicht lesen. `apps/commands` von Postiz hat diese Prüfung nicht, dort `ENCRYPTION_PROVIDER` ebenso nie setzen.
+- ein Token mit dem Präfix `enc:v1:` von Postiz gespeichert ist, direkt oder unter unserer Verschlüsselung (ab 0.10.2, dafür liest die Prüfung jede Zeile mit dem eigenen Schlüssel, eine je Kanal). Die Meldung nennt nur die Zahl der Kanäle. Ausweg: die Kanäle neu verbinden, denn ohne den Schlüssel von Postiz lässt sich `enc:v1:` nicht lesen. Ein gelöschter Kanal zählt mit. Ihn neu zu verbinden holt ihn zurück. Also neu verbinden und danach wieder trennen, oder seine Tokens von Hand leeren (Florian). `apps/commands` von Postiz hat diese Prüfung nicht, dort `ENCRYPTION_PROVIDER` ebenso nie setzen.
 
 Läuft alles, steht im Log `token encryption on (key <kid>)`, ohne Schlüssel `token encryption off: …`.
 
